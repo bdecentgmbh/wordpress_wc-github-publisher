@@ -13,9 +13,17 @@ use WP_Error;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Resolves GitHub's private-asset 302 redirect and streams the asset to disk,
- * landing it in `uploads/woocommerce_uploads/` so WooCommerce serves it under
- * its own access rules. The token is never sent to the signed (storage) host.
+ * Resolves GitHub's private-asset 302 redirect and streams the asset to disk.
+ *
+ * Two destinations are supported:
+ * - {@see download()} / {@see download_archive()} land the file in
+ *   `uploads/woocommerce_uploads/` so WooCommerce serves it under its own access
+ *   rules (used for single-asset products).
+ * - {@see download_to_temp()} / {@see download_archive_to_temp()} stop at a temp
+ *   file, so a bundle of several assets can be assembled into one zip and only
+ *   the final zip is moved into uploads.
+ *
+ * The token is never sent to the signed (storage) host.
  */
 class AssetDownloader {
 
@@ -44,16 +52,15 @@ class AssetDownloader {
 	 * @return array|WP_Error array( 'file' => absolute path, 'url' => url ) or WP_Error.
 	 */
 	public function download( $repo, $asset_id, $filename ) {
-		$repo = $this->client->normalize_repo( $repo );
-		if ( is_wp_error( $repo ) ) {
-			return $repo;
+		$tmp = $this->download_to_temp( $repo, $asset_id, $filename );
+		if ( is_wp_error( $tmp ) ) {
+			return $tmp;
 		}
-		$api_url = $this->client->api_base() . '/repos/' . $repo . '/releases/assets/' . (int) $asset_id;
-		return $this->fetch( $api_url, 'application/octet-stream', $filename );
+		return $this->move_into_uploads( $tmp['file'], $tmp['name'] );
 	}
 
 	/**
-	 * Download GitHub's auto-generated source archive for a ref (tag/branch/sha).
+	 * Download GitHub's auto-generated source archive for a ref into uploads.
 	 *
 	 * @param string $repo     "owner/repo".
 	 * @param string $ref      Git ref (e.g. a release tag).
@@ -61,24 +68,57 @@ class AssetDownloader {
 	 * @return array|WP_Error array( 'file' => absolute path, 'url' => url ) or WP_Error.
 	 */
 	public function download_archive( $repo, $ref, $filename ) {
+		$tmp = $this->download_archive_to_temp( $repo, $ref, $filename );
+		if ( is_wp_error( $tmp ) ) {
+			return $tmp;
+		}
+		return $this->move_into_uploads( $tmp['file'], $tmp['name'] );
+	}
+
+	/**
+	 * Download an asset to a temporary file (not moved into uploads).
+	 *
+	 * @param string $repo     "owner/repo".
+	 * @param int    $asset_id GitHub asset id.
+	 * @param string $filename Desired filename.
+	 * @return array|WP_Error array( 'file' => temp path, 'name' => filename ) or WP_Error.
+	 */
+	public function download_to_temp( $repo, $asset_id, $filename ) {
+		$repo = $this->client->normalize_repo( $repo );
+		if ( is_wp_error( $repo ) ) {
+			return $repo;
+		}
+		$api_url = $this->client->api_base() . '/repos/' . $repo . '/releases/assets/' . (int) $asset_id;
+		return $this->fetch_to_temp( $api_url, 'application/octet-stream', $filename );
+	}
+
+	/**
+	 * Download GitHub's source archive for a ref to a temporary file.
+	 *
+	 * @param string $repo     "owner/repo".
+	 * @param string $ref      Git ref (e.g. a release tag).
+	 * @param string $filename Desired filename.
+	 * @return array|WP_Error array( 'file' => temp path, 'name' => filename ) or WP_Error.
+	 */
+	public function download_archive_to_temp( $repo, $ref, $filename ) {
 		$repo = $this->client->normalize_repo( $repo );
 		if ( is_wp_error( $repo ) ) {
 			return $repo;
 		}
 		$api_url = $this->client->api_base() . '/repos/' . $repo . '/zipball/' . rawurlencode( $ref );
-		return $this->fetch( $api_url, '', $filename );
+		return $this->fetch_to_temp( $api_url, '', $filename );
 	}
 
 	/**
 	 * Fetch an authorized GitHub URL that redirects to a signed storage URL, and
-	 * stream the result into the protected uploads directory.
+	 * stream the result into a temporary file.
 	 *
 	 * @param string $api_url  Authorized GitHub endpoint (asset or archive).
 	 * @param string $accept   Optional Accept header (asset endpoints need octet-stream).
 	 * @param string $filename Desired filename.
-	 * @return array|WP_Error
+	 * @return array|WP_Error array( 'file' => temp path, 'name' => filename ) or WP_Error.
 	 */
-	private function fetch( $api_url, $accept, $filename ) {
+	private function fetch_to_temp( $api_url, $accept, $filename ) {
 		// Large Moodle zips can take a while; lift the time limit where allowed.
 		if ( function_exists( 'set_time_limit' ) ) {
 			@set_time_limit( 0 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
@@ -113,7 +153,7 @@ class AssetDownloader {
 			$download_url = wp_remote_retrieve_header( $response, 'location' );
 		} elseif ( 200 === $code ) {
 			// Some configurations return the bytes directly.
-			return $this->store_bytes( wp_remote_retrieve_body( $response ), $filename );
+			return $this->store_bytes_to_temp( wp_remote_retrieve_body( $response ), $filename );
 		}
 
 		if ( empty( $download_url ) ) {
@@ -148,17 +188,20 @@ class AssetDownloader {
 			return new WP_Error( 'wcgp_download', sprintf( __( 'Download failed (HTTP %d).', 'wc-github-publisher' ), $download_code ) );
 		}
 
-		return $this->move_into_uploads( $tmp, $filename );
+		return array(
+			'file' => $tmp,
+			'name' => $filename,
+		);
 	}
 
 	/**
-	 * Store an in-memory body to the protected uploads directory.
+	 * Store an in-memory body to a temporary file.
 	 *
 	 * @param string $bytes    File contents.
 	 * @param string $filename Filename.
-	 * @return array|WP_Error
+	 * @return array|WP_Error array( 'file' => temp path, 'name' => filename ) or WP_Error.
 	 */
-	private function store_bytes( $bytes, $filename ) {
+	private function store_bytes_to_temp( $bytes, $filename ) {
 		$tmp = wp_tempnam( $filename );
 		if ( ! $tmp ) {
 			return new WP_Error( 'wcgp_tmp', __( 'Could not create a temporary file.', 'wc-github-publisher' ) );
@@ -169,7 +212,10 @@ class AssetDownloader {
 		global $wp_filesystem;
 		WP_Filesystem();
 		$wp_filesystem->put_contents( $tmp, $bytes );
-		return $this->move_into_uploads( $tmp, $filename );
+		return array(
+			'file' => $tmp,
+			'name' => $filename,
+		);
 	}
 
 	/**
@@ -179,7 +225,7 @@ class AssetDownloader {
 	 * @param string $filename Desired filename.
 	 * @return array|WP_Error
 	 */
-	private function move_into_uploads( $tmp, $filename ) {
+	public function move_into_uploads( $tmp, $filename ) {
 		if ( ! function_exists( 'wp_handle_sideload' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/file.php';
 		}

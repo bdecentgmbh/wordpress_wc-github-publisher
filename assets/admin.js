@@ -4,382 +4,321 @@
 
 	var i18n = wcgpAdmin.i18n;
 	var isVariable = !! wcgpAdmin.isVariable;
-	// Asset keys (e.g. "asset:123" or "source:zip") with a publish entry on this product.
-	var publishedKeys = ( wcgpAdmin.publishedKeys || [] ).map( String );
+
+	// Per-repo releases loaded from the last "Load releases" call, keyed by repo.
+	var loaded = {};
 
 	function esc( value ) {
-		return $( '<div/>' ).text( value == null ? '' : String( value ) ).html();
+		return $( '<div/>' ).text( value == null ? '' : value ).html();
 	}
 
 	function sprintf1( template, value ) {
-		return template.replace( '%s', value ).replace( '%d', value );
+		return String( template ).replace( '%d', value ).replace( '%s', value );
 	}
 
 	function humanSize( bytes ) {
+		bytes = parseInt( bytes, 10 ) || 0;
 		if ( ! bytes ) {
 			return '';
 		}
 		var units = [ 'B', 'KB', 'MB', 'GB' ];
 		var i = 0;
-		var n = bytes;
-		while ( n >= 1024 && i < units.length - 1 ) {
-			n /= 1024;
+		while ( bytes >= 1024 && i < units.length - 1 ) {
+			bytes /= 1024;
 			i++;
 		}
-		return ( Math.round( n * 10 ) / 10 ) + ' ' + units[ i ];
-	}
-
-	function humanAgo( epochSeconds ) {
-		if ( ! epochSeconds ) {
-			return '';
-		}
-		var secs = Math.max( 0, Math.floor( Date.now() / 1000 ) - epochSeconds );
-		if ( secs < 60 ) {
-			return secs + 's';
-		}
-		if ( secs < 3600 ) {
-			return Math.floor( secs / 60 ) + 'm';
-		}
-		if ( secs < 86400 ) {
-			return Math.floor( secs / 3600 ) + 'h';
-		}
-		return Math.floor( secs / 86400 ) + 'd';
-	}
-
-	function isPublished( key ) {
-		return publishedKeys.indexOf( String( key ) ) !== -1;
+		return ( i ? bytes.toFixed( 1 ) : bytes ) + ' ' + units[ i ];
 	}
 
 	function productId() {
-		return $( '#wcgp-fetch' ).data( 'product' );
+		return $( '#wcgp-load' ).data( 'product' );
 	}
 
-	function repo() {
-		return $( '#_wcgp_repo' ).val();
-	}
-
-	// The selected publish target. Simple products have no selector → product target.
 	function currentTarget() {
-		var $sel = $( '#wcgp-target' );
-		if ( ! $sel.length ) {
+		var sel = $( '#wcgp-target' ).val() || '';
+		if ( ! isVariable || ! sel || sel === '__all__' ) {
 			return { attribute: '', value: '' };
 		}
-		var v = $sel.val();
-		if ( ! v || v === '__all__' ) {
-			return { attribute: '', value: '__all__' };
-		}
-		var idx = v.indexOf( '::' );
-		if ( idx === -1 ) {
-			return { attribute: '', value: '__all__' };
-		}
-		return { attribute: v.slice( 0, idx ), value: v.slice( idx + 2 ) };
+		var parts = sel.split( '::' );
+		return { attribute: parts[ 0 ] || '', value: parts[ 1 ] || '' };
 	}
 
-	function renderMeta( meta ) {
-		var $meta = $( '#wcgp-meta' ).empty();
-		if ( ! meta ) {
+	/* ----------------------------------------------------------------- Repeater */
+
+	var repoSeq = 1000; // New-row indices; existing rows are rendered server-side.
+
+	$( document ).on( 'click', '#wcgp-add-repo', function () {
+		var idx = repoSeq++;
+		var row =
+			'<div class="wcgp-repo-row form-field" style="padding:0 12px 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+			'<input type="text" class="wcgp-repo-input" name="wcgp_repos[' + idx + '][repo]" value="" placeholder="owner/moodle-mod_example" style="flex:1 1 240px;" />' +
+			'<input type="text" class="wcgp-repo-path" name="wcgp_repos[' + idx + '][path]" value="" placeholder="' + esc( i18n.installPath ) + '" style="flex:0 1 200px;" />' +
+			'<label style="white-space:nowrap;"><input type="radio" name="wcgp_repos_primary" value="' + idx + '" /> ' + esc( i18n.primary ) + '</label>' +
+			'<button type="button" class="button-link wcgp-remove-repo" title="' + esc( i18n.removeRepo ) + '">&times;</button>' +
+			'</div>';
+		$( '#wcgp-repos' ).append( row );
+	} );
+
+	$( document ).on( 'click', '.wcgp-remove-repo', function () {
+		var $rows = $( '#wcgp-repos .wcgp-repo-row' );
+		if ( $rows.length <= 1 ) {
+			$( this ).closest( '.wcgp-repo-row' ).find( 'input[type=text]' ).val( '' );
 			return;
 		}
-		var parts = [];
-		if ( meta.fetched_at ) {
-			parts.push( sprintf1( i18n.cachedAgo, humanAgo( meta.fetched_at ) ) );
+		var $row = $( this ).closest( '.wcgp-repo-row' );
+		var wasPrimary = $row.find( 'input[type=radio]' ).is( ':checked' );
+		$row.remove();
+		// Keep exactly one primary selected.
+		if ( wasPrimary && ! $( '#wcgp-repos input[type=radio]:checked' ).length ) {
+			$( '#wcgp-repos input[type=radio]' ).first().prop( 'checked', true );
 		}
-		if ( meta.rate && typeof meta.rate.remaining !== 'undefined' ) {
-			parts.push( sprintf1( i18n.rateLeft, meta.rate.remaining ) );
+	} );
+
+	/* ----------------------------------------------------------------- Composer */
+
+	function defaultAsset( release ) {
+		var assets = ( release && release.assets ) || [];
+		var i;
+		for ( i = 0; i < assets.length; i++ ) {
+			if ( assets[ i ].kind === 'asset' && /\.zip$/i.test( assets[ i ].name || '' ) ) {
+				return assets[ i ];
+			}
 		}
-		$meta.text( parts.join( ' · ' ) );
+		for ( i = 0; i < assets.length; i++ ) {
+			if ( assets[ i ].kind === 'asset' ) {
+				return assets[ i ];
+			}
+		}
+		return assets[ 0 ] || null;
 	}
 
-	function render( releases ) {
-		var $box = $( '#wcgp-releases' ).empty();
-		if ( ! releases || ! releases.length ) {
-			$box.html( '<p>' + esc( i18n.noReleases ) + '</p>' );
-			return;
+	function defaultReleaseIndex( releases ) {
+		for ( var i = 0; i < releases.length; i++ ) {
+			if ( releases[ i ].latest ) {
+				return i;
+			}
 		}
-		releases.forEach( function ( r ) {
-			var badges = '';
-			if ( r.latest ) {
-				badges += ' <span class="wcgp-badge wcgp-latest">' + esc( i18n.latest ) + '</span>';
-			}
-			if ( r.draft ) {
-				badges += ' <span class="wcgp-badge wcgp-draft">' + esc( i18n.draft ) + '</span>';
-			}
-			if ( r.prerelease ) {
-				badges += ' <span class="wcgp-badge wcgp-pre">' + esc( i18n.prerelease ) + '</span>';
-			}
+		return 0;
+	}
 
-			var $release = $( '<div class="wcgp-release"></div>' );
-			$release.append(
-				'<h4>' + esc( r.name || r.tag ) + ' <code>' + esc( r.tag ) + '</code>' + badges + '</h4>'
-			);
+	function assetOptions( release ) {
+		var assets = ( release && release.assets ) || [];
+		var def = defaultAsset( release );
+		var defKey = def && def.key;
+		var html = '';
+		assets.forEach( function ( a ) {
+			var label = a.kind === 'zipball' ? i18n.sourceZip : a.name;
+			if ( a.size ) {
+				label += ' (' + humanSize( a.size ) + ')';
+			}
+			html += '<option value="' + esc( a.key ) + '" data-kind="' + esc( a.kind ) + '" data-id="' + esc( a.id ) + '"' +
+				( a.key === defKey ? ' selected' : '' ) + '>' + esc( label ) + '</option>';
+		} );
+		return html;
+	}
 
-			if ( ! r.assets || ! r.assets.length ) {
-				$release.append( '<p class="description">' + esc( i18n.noAssets ) + '</p>' );
+	function releaseOptions( releases, selectedIndex ) {
+		var html = '';
+		releases.forEach( function ( r, i ) {
+			var label = ( r.name || r.tag || '' );
+			if ( r.tag && r.name && r.name !== r.tag ) {
+				label += ' (' + r.tag + ')';
+			}
+			var flags = [];
+			if ( r.latest ) { flags.push( i18n.latest ); }
+			if ( r.prerelease ) { flags.push( i18n.prerelease ); }
+			if ( r.draft ) { flags.push( i18n.draft ); }
+			if ( flags.length ) { label += ' — ' + flags.join( ', ' ); }
+			html += '<option value="' + i + '"' + ( i === selectedIndex ? ' selected' : '' ) + '>' + esc( label ) + '</option>';
+		} );
+		return html;
+	}
+
+	function renderComposer( repos ) {
+		loaded = {};
+		var $c = $( '#wcgp-composer' ).empty();
+		var publishable = 0;
+
+		repos.forEach( function ( repo ) {
+			loaded[ repo.repo ] = repo;
+			var $block = $( '<div class="wcgp-crepo" />' ).attr( 'data-repo', repo.repo );
+			$block.append( '<div class="wcgp-crepo-head"><strong>' + esc( repo.repo ) + '</strong>' +
+				( repo.primary ? ' <span class="wcgp-primary-badge">' + esc( i18n.primary || 'primary' ) + '</span>' : '' ) + '</div>' );
+
+			if ( repo.error ) {
+				$block.append( '<div class="wcgp-crepo-error">' + esc( repo.error ) + '</div>' );
+			} else if ( ! repo.releases || ! repo.releases.length ) {
+				$block.append( '<div class="wcgp-crepo-error">' + esc( i18n.noReleases ) + '</div>' );
 			} else {
-				var $list = $( '<ul class="wcgp-assets"></ul>' );
-				r.assets.forEach( function ( a ) {
-					$list.append( assetRow( a, r.tag ) );
-				} );
-				$release.append( $list );
-				$release.append(
-					$( '<button type="button" class="button button-small wcgp-publish-selected"></button>' )
-						.text( i18n.publishSel )
-						.attr( 'data-tag', r.tag )
+				publishable++;
+				var relIdx = defaultReleaseIndex( repo.releases );
+				var rel = repo.releases[ relIdx ];
+				$block.append(
+					'<div class="wcgp-crepo-controls">' +
+					'<label>' + esc( i18n.release ) + ' <select class="wcgp-rel">' + releaseOptions( repo.releases, relIdx ) + '</select></label> ' +
+					'<label>' + esc( i18n.asset ) + ' <select class="wcgp-asset">' + assetOptions( rel ) + '</select></label>' +
+					'</div>'
 				);
 			}
-			$box.append( $release );
+			$c.append( $block );
 		} );
+
+		// Publish only when every configured repo offers a selectable release.
+		var ok = publishable > 0 && publishable === repos.length;
+		$( '#wcgp-publish-wrap' ).toggle( ok );
+		$( '#wcgp-publish-status' ).text( '' );
 	}
 
-	function assetRow( a, tag ) {
-		var key = a.key || ( 'asset:' + a.id );
-		var kind = a.kind || 'asset';
-		var $li = $( '<li></li>' ).attr( 'data-key', key ).attr( 'data-asset', a.id );
-		var published = isPublished( key );
-		// Variable products keep controls enabled (an asset may target several values).
-		var lock = published && ! isVariable;
+	// Re-render the asset select when the release changes.
+	$( document ).on( 'change', '.wcgp-rel', function () {
+		var $block = $( this ).closest( '.wcgp-crepo' );
+		var repo = $block.attr( 'data-repo' );
+		var release = loaded[ repo ] && loaded[ repo ].releases[ parseInt( $( this ).val(), 10 ) ];
+		$block.find( '.wcgp-asset' ).html( assetOptions( release ) );
+	} );
 
-		var $check = $( '<input type="checkbox" class="wcgp-asset-check" />' )
-			.attr( 'data-asset', a.id )
-			.attr( 'data-kind', kind )
-			.attr( 'data-tag', tag );
-		if ( lock ) {
-			$check.prop( 'disabled', true );
-		}
-		$li.append( $check ).append( ' ' );
-		$li.append( '<span class="wcgp-asset-name">' + esc( a.name ) + '</span> ' );
-		if ( a.size ) {
-			$li.append( '<span class="wcgp-asset-size">' + esc( humanSize( a.size ) ) + '</span> ' );
-		}
-
-		var $btn = $( '<button type="button" class="button button-small wcgp-publish"></button>' )
-			.text( i18n.publish )
-			.attr( 'data-asset', a.id )
-			.attr( 'data-kind', kind )
-			.attr( 'data-tag', tag );
-		if ( lock ) {
-			$btn.prop( 'disabled', true );
-		}
-		$li.append( $btn );
-		$li.append( ' <span class="wcgp-status"></span>' );
-
-		if ( published ) {
-			$li.append( ' <span class="wcgp-badge wcgp-published">✓ ' + esc( i18n.published ) + '</span>' );
-		}
-		return $li;
-	}
-
-	function fetchReleases( force ) {
-		var $spinner = $( '#wcgp-fetch' ).next( '.spinner' );
+	function loadReleases( force ) {
+		var $spinner = $( '#wcgp-load' ).siblings( '.spinner' );
 		$spinner.addClass( 'is-active' );
-		$( '#wcgp-releases' ).html( '<p>' + esc( i18n.fetching ) + '</p>' );
+		$( '#wcgp-composer' ).html( '<p class="description">' + esc( i18n.loading ) + '</p>' );
+		$( '#wcgp-publish-wrap' ).hide();
 
 		return $.post( wcgpAdmin.ajaxUrl, {
-			action: 'wcgp_fetch_releases',
+			action: 'wcgp_fetch_bundle',
 			nonce: wcgpAdmin.fetchNonce,
-			repo: repo(),
+			product: productId(),
 			force: force ? 1 : 0
 		} )
 			.done( function ( res ) {
-				if ( res && res.success ) {
-					render( res.data.releases );
-					renderMeta( res.data.meta );
+				if ( res && res.success && res.data && res.data.repos ) {
+					renderComposer( res.data.repos );
 				} else {
-					$( '#wcgp-releases' ).html(
-						'<p class="wcgp-error">' + esc( ( res && res.data && res.data.message ) || i18n.error ) + '</p>'
-					);
+					$( '#wcgp-composer' ).html( '<p class="wcgp-crepo-error">' + esc( ( res && res.data && res.data.message ) || i18n.error ) + '</p>' );
 				}
 			} )
 			.fail( function () {
-				$( '#wcgp-releases' ).html( '<p class="wcgp-error">' + esc( i18n.error ) + '</p>' );
+				$( '#wcgp-composer' ).html( '<p class="wcgp-crepo-error">' + esc( i18n.error ) + '</p>' );
 			} )
 			.always( function () {
 				$spinner.removeClass( 'is-active' );
 			} );
 	}
 
-	// Publish one asset to the current target. Returns a jQuery promise.
-	function publishAsset( assetId, kind, tag, $status ) {
-		var target = currentTarget();
-		$status.removeClass( 'wcgp-ok wcgp-error' ).text( i18n.publishing );
-		return $.post( wcgpAdmin.ajaxUrl, {
-			action: 'wcgp_publish_asset',
-			nonce: wcgpAdmin.publishNonce,
-			product: productId(),
-			repo: repo(),
-			asset: assetId,
-			kind: kind,
-			tag: tag,
-			attribute: target.attribute,
-			value: target.value
-		} ).then( function ( res ) {
-			if ( res && res.success ) {
-				$status.addClass( 'wcgp-ok' ).text( '✓ ' + i18n.published );
-				onPublished( res.data );
-			} else {
-				$status.addClass( 'wcgp-error' ).text( ( res && res.data && res.data.message ) || i18n.error );
-			}
-			return res;
-		}, function () {
-			$status.addClass( 'wcgp-error' ).text( i18n.error );
-		} );
-	}
-
-	function onPublished( data ) {
-		var key = data.asset_key;
-		if ( ! isPublished( key ) ) {
-			publishedKeys.push( String( key ) );
-		}
-		var $li = $( '#wcgp-releases li' ).filter( function () {
-			return $( this ).attr( 'data-key' ) === key;
-		} );
-		if ( ! $li.find( '.wcgp-published' ).length ) {
-			$li.append( ' <span class="wcgp-badge wcgp-published">✓ ' + esc( i18n.published ) + '</span>' );
-		}
-		if ( ! isVariable ) {
-			$li.find( '.wcgp-publish' ).prop( 'disabled', true );
-			$li.find( '.wcgp-asset-check' ).prop( 'checked', false ).prop( 'disabled', true );
-		}
-		addPublishedRow( data );
-	}
-
-	function addPublishedRow( data ) {
-		$( '#wcgp-published .wcgp-empty' ).remove();
-
-		var date = '';
-		if ( data.published_at ) {
-			try {
-				date = new Date( data.published_at ).toLocaleDateString();
-			} catch ( e ) {
-				date = '';
-			}
-		}
-
-		var $li = $( '<li class="wcgp-managed"></li>' )
-			.attr( 'data-publish', data.publish_id )
-			.attr( 'data-key', data.asset_key );
-		$li.append( '<span class="wcgp-managed-label">' + esc( data.label ) + '</span> ' );
-
-		if ( isVariable && data.target_label ) {
-			var targetText = data.target_label + ' · ' + sprintf1( i18n.variations, data.targets );
-			$li.append( '<span class="wcgp-managed-target">→ ' + esc( targetText ) + '</span> ' );
-		}
-		if ( date ) {
-			$li.append( '<span class="wcgp-managed-date">— ' + esc( date ) + '</span> ' );
-		}
-		$li.append(
-			$( '<button type="button" class="button-link wcgp-remove"></button>' )
-				.text( i18n.remove )
-				.attr( 'data-publish', data.publish_id )
-		);
-		$li.append( ' <span class="wcgp-status"></span>' );
-		$( '#wcgp-published' ).append( $li );
-	}
-
-	// After a row is removed, drop the published badge/lock if no rows remain for it.
-	function refreshAssetState( key ) {
-		var stillPublished = $( '#wcgp-published li' ).filter( function () {
-			return $( this ).attr( 'data-key' ) === key;
-		} ).length > 0;
-		if ( stillPublished ) {
-			return;
-		}
-		var idx = publishedKeys.indexOf( String( key ) );
-		if ( idx !== -1 ) {
-			publishedKeys.splice( idx, 1 );
-		}
-		var $arow = $( '#wcgp-releases li' ).filter( function () {
-			return $( this ).attr( 'data-key' ) === key;
-		} );
-		$arow.find( '.wcgp-published' ).remove();
-		$arow.find( '.wcgp-publish' ).prop( 'disabled', false );
-		$arow.find( '.wcgp-asset-check' ).prop( 'disabled', false );
-	}
-
-	// --- Events ---
-
-	$( document ).on( 'click', '#wcgp-fetch', function () {
-		fetchReleases( false );
+	$( document ).on( 'click', '#wcgp-load', function () {
+		loadReleases( false );
 	} );
 
 	$( document ).on( 'click', '#wcgp-refresh', function ( e ) {
 		e.preventDefault();
-		fetchReleases( true );
+		loadReleases( true );
 	} );
 
-	$( document ).on( 'click', '.wcgp-publish', function () {
-		var $btn = $( this );
-		if ( ! window.confirm( i18n.confirm ) ) {
+	/* ------------------------------------------------------------------ Publish */
+
+	function collectSelections() {
+		var selections = [];
+		var complete = true;
+		$( '#wcgp-composer .wcgp-crepo' ).each( function () {
+			var $block = $( this );
+			var repo = $block.attr( 'data-repo' );
+			var $rel = $block.find( '.wcgp-rel' );
+			var $asset = $block.find( '.wcgp-asset option:selected' );
+			if ( ! $rel.length || ! $asset.length ) {
+				complete = false;
+				return;
+			}
+			var release = loaded[ repo ] && loaded[ repo ].releases[ parseInt( $rel.val(), 10 ) ];
+			selections.push( {
+				repo: repo,
+				tag: release ? release.tag : '',
+				kind: $asset.data( 'kind' ) || 'asset',
+				asset_id: $asset.data( 'id' ) || 0
+			} );
+		} );
+		return complete ? selections : null;
+	}
+
+	function addPublishedRow( data ) {
+		$( '#wcgp-published .wcgp-empty' ).remove();
+		var label = data.label || '';
+		var li = '<li class="wcgp-managed" data-publish="' + esc( data.publish_id ) + '">' +
+			'<span class="wcgp-managed-label">' + esc( label ) + '</span>';
+		if ( data.components && data.components.length > 1 ) {
+			li += ' <span class="wcgp-managed-components">' + esc( sprintf1( i18n.components, data.components.length ) ) + '</span>';
+		}
+		if ( isVariable && data.target_label ) {
+			li += ' <span class="wcgp-managed-target">→ ' + esc( data.target_label ) + '</span>';
+		}
+		li += ' <button type="button" class="button-link wcgp-remove" data-publish="' + esc( data.publish_id ) + '">' + esc( i18n.remove ) + '</button>' +
+			'<span class="wcgp-status"></span></li>';
+		$( '#wcgp-published' ).append( li );
+	}
+
+	$( document ).on( 'click', '#wcgp-publish-bundle', function () {
+		var selections = collectSelections();
+		if ( ! selections ) {
+			window.alert( i18n.error );
 			return;
 		}
-		$btn.prop( 'disabled', true );
-		var key = $btn.closest( 'li' ).attr( 'data-key' );
-		publishAsset( $btn.data( 'asset' ), $btn.data( 'kind' ), $btn.data( 'tag' ), $btn.nextAll( '.wcgp-status' ).first() )
-			.always( function () {
-				if ( isVariable || ! isPublished( key ) ) {
-					$btn.prop( 'disabled', false );
+		if ( ! window.confirm( i18n.confirmPublish ) ) {
+			return;
+		}
+		var $btn = $( this ).prop( 'disabled', true );
+		var $status = $( '#wcgp-publish-status' ).text( i18n.publishing );
+		var target = currentTarget();
+
+		$.post( wcgpAdmin.ajaxUrl, {
+			action: 'wcgp_publish_bundle',
+			nonce: wcgpAdmin.publishNonce,
+			product: productId(),
+			attribute: target.attribute,
+			value: target.value,
+			selections: selections
+		} )
+			.done( function ( res ) {
+				if ( res && res.success ) {
+					$status.text( i18n.published );
+					addPublishedRow( res.data );
+				} else {
+					$status.text( ( res && res.data && res.data.message ) || i18n.error );
 				}
+			} )
+			.fail( function () {
+				$status.text( i18n.error );
+			} )
+			.always( function () {
+				$btn.prop( 'disabled', false );
 			} );
 	} );
 
-	$( document ).on( 'click', '.wcgp-publish-selected', function () {
-		var $release = $( this ).closest( '.wcgp-release' );
-		var $checked = $release.find( '.wcgp-asset-check:checked' );
-		if ( ! $checked.length || ! window.confirm( i18n.confirm ) ) {
-			return;
-		}
-		var $selectedBtn = $( this ).prop( 'disabled', true );
-
-		// Publish sequentially to avoid concurrent product/variation saves clobbering.
-		var queue = $checked.toArray();
-		( function next() {
-			if ( ! queue.length ) {
-				$selectedBtn.prop( 'disabled', false );
-				return;
-			}
-			var $chk = $( queue.shift() );
-			var $li = $chk.closest( 'li' );
-			$li.find( '.wcgp-publish' ).prop( 'disabled', true );
-			publishAsset( $chk.data( 'asset' ), $chk.data( 'kind' ), $chk.data( 'tag' ), $li.find( '.wcgp-status' ).first() )
-				.always( next );
-		} )();
-	} );
+	/* ---------------------------------------------------------------- Unpublish */
 
 	$( document ).on( 'click', '.wcgp-remove', function () {
-		var $btn = $( this );
 		if ( ! window.confirm( i18n.confirmRemove ) ) {
 			return;
 		}
-		var publishId = $btn.data( 'publish' );
-		var $li = $btn.closest( 'li' );
-		var key = $li.attr( 'data-key' );
-		var $status = $li.find( '.wcgp-status' ).first();
-		$btn.prop( 'disabled', true );
-		$status.removeClass( 'wcgp-ok wcgp-error' ).text( i18n.removing );
+		var $li = $( this ).closest( '.wcgp-managed' );
+		var $status = $li.find( '.wcgp-status' ).text( i18n.removing );
 
 		$.post( wcgpAdmin.ajaxUrl, {
 			action: 'wcgp_unpublish',
 			nonce: wcgpAdmin.unpublishNonce,
 			product: productId(),
-			publish: publishId
+			publish: $li.data( 'publish' )
 		} )
 			.done( function ( res ) {
 				if ( res && res.success ) {
 					$li.remove();
-					if ( ! $( '#wcgp-published li' ).length ) {
+					if ( ! $( '#wcgp-published .wcgp-managed' ).length ) {
 						$( '#wcgp-published' ).append( '<li class="wcgp-empty">' + esc( i18n.nothingPublished ) + '</li>' );
 					}
-					if ( key ) {
-						refreshAssetState( key );
-					}
 				} else {
-					$btn.prop( 'disabled', false );
-					$status.addClass( 'wcgp-error' ).text( ( res && res.data && res.data.message ) || i18n.error );
+					$status.text( ( res && res.data && res.data.message ) || i18n.error );
 				}
 			} )
 			.fail( function () {
-				$btn.prop( 'disabled', false );
-				$status.addClass( 'wcgp-error' ).text( i18n.error );
+				$status.text( i18n.error );
 			} );
 	} );
+
 } )( jQuery );

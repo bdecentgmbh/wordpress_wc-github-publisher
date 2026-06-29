@@ -26,9 +26,16 @@ WooCommerce shop.
 - **Token stored encrypted at rest** (libsodium, with an OpenSSL fallback). The
   key is derived from your WordPress salts, so a database dump alone does not
   reveal it.
-- **Simple, variable and variable-subscription products.** Publish an asset to a
-  whole product, to all variations, or to the variations matching an attribute
-  value (e.g. `Platform = Moodle`).
+- **Multi-repository bundles.** A product can publish from several repositories
+  at once. The download becomes a single zip containing one release asset per
+  repo plus an auto-generated `INSTALL.md`, and its name ends in `— UNZIP ME` so
+  customers unpack it before installing into Moodle. A single-repo product is
+  attached directly, with no wrapping. Install paths in INSTALL.md are derived
+  from each repo name (`moodle-{type}_{name}` → the Moodle plugin directory),
+  with a per-repo override.
+- **Simple, variable and variable-subscription products.** Publish to a whole
+  product, to all variations, or to the variations matching an attribute value
+  (e.g. `Platform = Moodle`).
 - **Auto-coverage of new variations.** A newly created variation that matches an
   existing mapping is covered automatically on save.
 - **Source-zip fallback.** GitHub's auto-generated *Source code (zip)* is offered
@@ -66,13 +73,15 @@ WooCommerce shop.
    fine-grained Personal Access Token with read-only **Contents** access to your
    release repositories. Optionally set a default organization/owner so you can
    enter just a repo name on products.
-2. **Link a product.** Edit a product, open the **GitHub** tab, and enter
-   `owner/repo` (or just the repo name when a default owner is set).
-3. **Fetch releases.** Click **Fetch releases**, then **Publish** on the asset(s)
-   you want to sell. For variable products, pick which variations should receive
-   the asset first.
-4. The asset is downloaded server-side into WooCommerce's protected uploads
-   directory and added as a downloadable file. Older versions are pruned to the
+2. **Link a product.** Edit a product, open the **GitHub** tab, add one or more
+   `owner/repo` repositories (or just the repo name when a default owner is set),
+   mark one as **primary**, and save the product.
+3. **Publish.** Click **Load releases**, pick a release per repository (latest by
+   default), and click **Publish bundle**. For variable products, pick which
+   variations should receive the bundle first.
+4. The assets are downloaded server-side into WooCommerce's protected uploads
+   directory. A single repository is attached as-is; several are wrapped into one
+   `… — UNZIP ME.zip` with an `INSTALL.md`. Older versions are pruned to the
    configured limit (default 3).
 
 ### What it does **not** do
@@ -107,11 +116,15 @@ and Composer are available, and on every push via GitHub Actions.
 wc-github-publisher.php      Bootstrap: constants, autoloader, HPOS, textdomain
 src/
   Plugin.php                 Wires the admin pieces together
-  Publisher.php              Download → attach to target(s) → prune; naming
+  Publisher.php              Download → package → attach to target(s) → prune
+  Repos.php                  Product repo list (normalize, primary, back-compat)
   Targets.php                Resolve publish targets (product / variations)
   Status.php                 Last-error + rate-limit snapshot store
+  Moodle/ComponentMap.php    Repo name → Moodle component + install directory
+  Bundle/Packager.php        Assemble component zips + INSTALL.md into one zip
+  Bundle/InstallDoc.php      Render the bundled INSTALL.md
   GitHub/Client.php          REST client: list releases, read asset metadata
-  GitHub/AssetDownloader.php Stream a (private) asset into protected uploads
+  GitHub/AssetDownloader.php Stream a (private) asset to uploads or a temp file
   Security/TokenStore.php    Encrypted token storage + settings
   Admin/SettingsPage.php     Token & options screen
   Admin/ProductGitHubTab.php Product "GitHub" tab + AJAX endpoints

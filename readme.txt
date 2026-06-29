@@ -5,7 +5,7 @@ Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 7.4
 Requires Plugins: woocommerce
-Stable tag: 0.4.1
+Stable tag: 0.5.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -27,10 +27,13 @@ WooCommerce shop.
 
 1. Add a fine-grained GitHub Personal Access Token (read-only "Contents") under
    WooCommerce → GitHub Publisher. It is stored encrypted.
-2. Edit a product, open the **GitHub** tab, and enter the `owner/repo`.
-3. Click **Fetch releases**, then **Publish** on the asset you want to sell.
-4. The asset is downloaded server-side into WooCommerce's protected uploads
-   directory and added as a downloadable file on the product. Older versions are
+2. Edit a product, open the **GitHub** tab, and add one or more `owner/repo`
+   repositories (mark one as primary), then save the product.
+3. Click **Load releases**, pick a release per repository (latest by default),
+   and click **Publish bundle**.
+4. The assets are downloaded server-side into WooCommerce's protected uploads
+   directory. A single repository is attached as-is; several are wrapped into one
+   zip (named "… — UNZIP ME") that also contains an INSTALL.md. Older versions are
    pruned to the configured limit (default 3).
 
 = What it does NOT do =
@@ -46,6 +49,14 @@ WooCommerce shop.
 Yes. The token-authenticated request follows GitHub's signed-URL redirect
 server-side and stores the file locally, so the token and signed URL are never
 exposed to customers.
+
+= Can one product bundle several repositories? =
+
+Yes. Add multiple repositories on the product's GitHub tab and mark one as
+primary. Publishing builds a single zip containing one release asset from each
+repository plus an INSTALL.md that lists where each Moodle component installs.
+Because such a bundle must be unpacked before use, its name ends in "— UNZIP ME".
+A product with a single repository is published directly, without wrapping.
 
 = Do variable and subscription products work? =
 
@@ -67,6 +78,20 @@ Assets are streamed to disk rather than buffered in memory. For very large files
 you may need to raise your web server's proxy/FastCGI timeouts.
 
 == Changelog ==
+
+= 0.5.0 =
+* Multi-repository bundles: a product can publish from several repositories at
+  once. The download becomes a single zip containing one release asset per repo
+  plus an auto-generated INSTALL.md, and its name ends in "— UNZIP ME" so
+  customers know to unpack it before installing into Moodle.
+* Install paths in INSTALL.md are derived from each repo's name
+  (moodle-{type}_{name} → the Moodle plugin directory), with a per-repo override.
+* Each repo's release defaults to latest, with a per-repo override; the primary
+  repo's version names the bundle.
+* Single-repository products are unchanged: the asset is attached directly, with
+  no wrapping.
+* Downloadable files are named after the product title and release version (e.g.
+  "Media Time 1.1 R3").
 
 = 0.4.1 =
 * Fix release ordering: the GitHub list endpoint can omit or mis-order the actual

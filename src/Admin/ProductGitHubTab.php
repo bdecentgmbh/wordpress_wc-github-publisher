@@ -1,8 +1,10 @@
 <?php
 /**
- * Product "GitHub" tab: link a repo, fetch releases, choose a target, and
- * publish assets. Supports simple products and variable / variable-subscription
- * products (publishing to variations by attribute value).
+ * Product "GitHub" tab: configure one or more repositories, load their releases,
+ * and publish a bundle (a single download combining one release asset per repo;
+ * a wrapped zip with INSTALL.md when there is more than one). Supports simple
+ * products and variable / variable-subscription products (publishing to
+ * variations by attribute value).
  *
  * @package WCGP
  */
@@ -11,6 +13,7 @@ namespace WCGP\Admin;
 
 use WCGP\GitHub\Client;
 use WCGP\Publisher;
+use WCGP\Repos;
 use WCGP\Targets;
 use WCGP\Security\TokenStore;
 
@@ -28,14 +31,14 @@ class ProductGitHubTab {
 	public function register() {
 		add_filter( 'woocommerce_product_data_tabs', array( $this, 'add_tab' ) );
 		add_action( 'woocommerce_product_data_panels', array( $this, 'panel' ) );
-		add_action( 'woocommerce_process_product_meta', array( $this, 'save_repo' ) );
+		add_action( 'woocommerce_process_product_meta', array( $this, 'save_repos' ) );
 		// Re-attach managed files after WooCommerce processes the save, so a manual
 		// "Update" never drops a published file.
 		add_action( 'woocommerce_process_product_meta', array( $this, 'reconcile_product' ), 30 );
 		add_action( 'woocommerce_save_product_variation', array( $this, 'save_variation' ), 30, 2 );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue' ) );
-		add_action( 'wp_ajax_wcgp_fetch_releases', array( $this, 'ajax_fetch' ) );
-		add_action( 'wp_ajax_wcgp_publish_asset', array( $this, 'ajax_publish' ) );
+		add_action( 'wp_ajax_wcgp_fetch_bundle', array( $this, 'ajax_fetch_bundle' ) );
+		add_action( 'wp_ajax_wcgp_publish_bundle', array( $this, 'ajax_publish_bundle' ) );
 		add_action( 'wp_ajax_wcgp_unpublish', array( $this, 'ajax_unpublish' ) );
 	}
 
@@ -60,9 +63,14 @@ class ProductGitHubTab {
 	 */
 	public function panel() {
 		global $post;
-		$product    = wc_get_product( $post->ID );
-		$repo       = get_post_meta( $post->ID, Publisher::META_REPO, true );
+		$product     = wc_get_product( $post->ID );
+		$entries     = Repos::get( $post->ID );
 		$is_variable = $product && Targets::is_variable( $product );
+
+		// Always render at least one (blank) repo row for a fresh product.
+		if ( empty( $entries ) ) {
+			$entries = array( array( 'repo' => '', 'primary' => true, 'path' => '' ) );
+		}
 		?>
 		<div id="wcgp_product_data" class="panel woocommerce_options_panel">
 			<?php if ( ! TokenStore::has_token() ) : ?>
@@ -80,18 +88,24 @@ class ProductGitHubTab {
 			<?php endif; ?>
 
 			<div class="options_group">
-				<?php
-				woocommerce_wp_text_input(
-					array(
-						'id'          => '_wcgp_repo',
-						'label'       => __( 'GitHub repository', 'wc-github-publisher' ),
-						'placeholder' => 'owner/repo',
-						'description' => __( 'The repository whose releases you want to publish, e.g. myorg/my-moodle-plugin. If a default organization is set, you can enter just the repo name.', 'wc-github-publisher' ),
-						'desc_tip'    => true,
-						'value'       => $repo,
-					)
-				);
-				?>
+				<p class="form-field" style="margin-bottom:4px;">
+					<strong><?php esc_html_e( 'Repositories', 'wc-github-publisher' ); ?></strong>
+				</p>
+				<p class="description" style="padding:0 12px 6px;">
+					<?php esc_html_e( 'Each repository contributes one release asset. With more than one repository, the download is a single zip bundling every component plus an INSTALL.md, and its name ends in "— UNZIP ME". Mark the repository whose version names the bundle as primary.', 'wc-github-publisher' ); ?>
+				</p>
+				<div id="wcgp-repos" data-primary-field="wcgp_repos_primary">
+					<?php
+					$i = 0;
+					foreach ( $entries as $entry ) {
+						$this->render_repo_row( $i, $entry );
+						++$i;
+					}
+					?>
+				</div>
+				<p class="form-field" style="padding:0 12px;">
+					<button type="button" class="button" id="wcgp-add-repo"><?php esc_html_e( 'Add repository', 'wc-github-publisher' ); ?></button>
+				</p>
 			</div>
 
 			<?php $this->render_published_list( $post->ID, $product ); ?>
@@ -114,27 +128,58 @@ class ProductGitHubTab {
 						</select>
 					</p>
 					<p class="description" style="padding:0 12px;">
-						<?php esc_html_e( 'Choose which variations receive the next published asset — e.g. Platform: Moodle covers all its subscription periods.', 'wc-github-publisher' ); ?>
+						<?php esc_html_e( 'Choose which variations receive the next published bundle — e.g. Platform: Moodle covers all its subscription periods.', 'wc-github-publisher' ); ?>
 					</p>
 				</div>
 			<?php endif; ?>
 
 			<div class="options_group">
 				<p class="form-field">
-					<button type="button" class="button" id="wcgp-fetch" data-product="<?php echo esc_attr( $post->ID ); ?>">
-						<?php esc_html_e( 'Fetch releases', 'wc-github-publisher' ); ?>
+					<button type="button" class="button" id="wcgp-load" data-product="<?php echo esc_attr( $post->ID ); ?>">
+						<?php esc_html_e( 'Load releases', 'wc-github-publisher' ); ?>
 					</button>
 					<button type="button" class="button-link" id="wcgp-refresh" title="<?php esc_attr_e( 'Force a fresh pull from GitHub', 'wc-github-publisher' ); ?>">
 						<?php esc_html_e( 'Refresh', 'wc-github-publisher' ); ?>
 					</button>
 					<span class="spinner" style="float:none;margin-top:0;"></span>
-					<span id="wcgp-meta" class="description"></span>
 				</p>
 				<p class="description" style="padding:0 12px;">
-					<?php esc_html_e( 'Publishing attaches the file immediately — saving the product is not required. Reload to see it under the variation Downloadable files list.', 'wc-github-publisher' ); ?>
+					<?php esc_html_e( 'Save the product after changing repositories, then load releases. Publishing attaches the bundle immediately — reload to see it under the Downloadable files list.', 'wc-github-publisher' ); ?>
 				</p>
-				<div id="wcgp-releases" style="padding:0 12px 12px;"></div>
+				<div id="wcgp-composer" style="padding:0 12px 12px;"></div>
+				<p class="form-field" id="wcgp-publish-wrap" style="display:none;padding:0 12px 12px;">
+					<button type="button" class="button button-primary" id="wcgp-publish-bundle" data-product="<?php echo esc_attr( $post->ID ); ?>">
+						<?php esc_html_e( 'Publish bundle', 'wc-github-publisher' ); ?>
+					</button>
+					<span id="wcgp-publish-status" class="description"></span>
+				</p>
 			</div>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render one repository row in the repeater.
+	 *
+	 * @param int   $index Row index.
+	 * @param array $entry { repo, primary, path }.
+	 */
+	private function render_repo_row( $index, $entry ) {
+		$repo    = isset( $entry['repo'] ) ? $entry['repo'] : '';
+		$path    = isset( $entry['path'] ) ? $entry['path'] : '';
+		$primary = ! empty( $entry['primary'] );
+		?>
+		<div class="wcgp-repo-row form-field" style="padding:0 12px 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+			<input type="text" class="wcgp-repo-input" name="wcgp_repos[<?php echo esc_attr( $index ); ?>][repo]"
+				value="<?php echo esc_attr( $repo ); ?>" placeholder="owner/moodle-mod_example" style="flex:1 1 240px;" />
+			<input type="text" class="wcgp-repo-path" name="wcgp_repos[<?php echo esc_attr( $index ); ?>][path]"
+				value="<?php echo esc_attr( $path ); ?>" placeholder="<?php esc_attr_e( 'install path (optional)', 'wc-github-publisher' ); ?>"
+				title="<?php esc_attr_e( 'Override the auto-derived Moodle install path for INSTALL.md', 'wc-github-publisher' ); ?>" style="flex:0 1 200px;" />
+			<label style="white-space:nowrap;">
+				<input type="radio" name="wcgp_repos_primary" value="<?php echo esc_attr( $index ); ?>" <?php checked( $primary ); ?> />
+				<?php esc_html_e( 'primary', 'wc-github-publisher' ); ?>
+			</label>
+			<button type="button" class="button-link wcgp-remove-repo" title="<?php esc_attr_e( 'Remove repository', 'wc-github-publisher' ); ?>">&times;</button>
 		</div>
 		<?php
 	}
@@ -178,16 +223,25 @@ class ProductGitHubTab {
 		$publisher = new Publisher();
 		$label     = $publisher->label_for( $entry );
 		$date      = ! empty( $entry['published_at'] ) ? mysql2date( get_option( 'date_format' ), $entry['published_at'] ) : '';
+		$count     = ! empty( $entry['components'] ) ? count( (array) $entry['components'] ) : 0;
 		$target    = '';
 		if ( $is_variable ) {
-			$count  = isset( $entry['variation_ids'] ) ? count( (array) $entry['variation_ids'] ) : 0;
+			$vcount = isset( $entry['variation_ids'] ) ? count( (array) $entry['variation_ids'] ) : 0;
 			$target = $publisher->target_label( isset( $entry['attribute'] ) ? $entry['attribute'] : '', isset( $entry['value'] ) ? $entry['value'] : Targets::ALL );
 			/* translators: %d: number of variations. */
-			$target = $target . ' · ' . sprintf( _n( '%d variation', '%d variations', $count, 'wc-github-publisher' ), $count );
+			$target = $target . ' · ' . sprintf( _n( '%d variation', '%d variations', $vcount, 'wc-github-publisher' ), $vcount );
 		}
 		?>
-		<li class="wcgp-managed" data-publish="<?php echo esc_attr( $entry['publish_id'] ); ?>" data-key="<?php echo esc_attr( $this->entry_key( $entry ) ); ?>">
+		<li class="wcgp-managed" data-publish="<?php echo esc_attr( $entry['publish_id'] ); ?>">
 			<span class="wcgp-managed-label"><?php echo esc_html( $label ); ?></span>
+			<?php if ( $count > 1 ) : ?>
+				<span class="wcgp-managed-components">
+					<?php
+					/* translators: %d: number of bundled components. */
+					echo esc_html( sprintf( _n( '%d component', '%d components', $count, 'wc-github-publisher' ), $count ) );
+					?>
+				</span>
+			<?php endif; ?>
 			<?php if ( $target ) : ?>
 				<span class="wcgp-managed-target">→ <?php echo esc_html( $target ); ?></span>
 			<?php endif; ?>
@@ -203,32 +257,35 @@ class ProductGitHubTab {
 	}
 
 	/**
-	 * Stable asset key for a publish-index entry (with a fallback for entries
-	 * created before asset keys were stored).
-	 *
-	 * @param array $entry Publish index entry.
-	 * @return string
-	 */
-	private function entry_key( $entry ) {
-		if ( ! empty( $entry['asset_key'] ) ) {
-			return $entry['asset_key'];
-		}
-		return 'asset:' . ( isset( $entry['asset_id'] ) ? (int) $entry['asset_id'] : 0 );
-	}
-
-	/**
-	 * Save the repository field on product save.
+	 * Save the repository list on product save.
 	 *
 	 * @param int $post_id Product id.
 	 */
-	public function save_repo( $post_id ) {
+	public function save_repos( $post_id ) {
 		// WooCommerce verifies its own product nonce before this fires.
 		if ( ! current_user_can( 'edit_product', $post_id ) ) {
 			return;
 		}
-		if ( isset( $_POST['_wcgp_repo'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
-			update_post_meta( $post_id, Publisher::META_REPO, sanitize_text_field( wp_unslash( $_POST['_wcgp_repo'] ) ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		if ( ! isset( $_POST['wcgp_repos'] ) || ! is_array( $_POST['wcgp_repos'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			return;
 		}
+
+		$primary = isset( $_POST['wcgp_repos_primary'] ) ? sanitize_text_field( wp_unslash( $_POST['wcgp_repos_primary'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$raw     = wp_unslash( $_POST['wcgp_repos'] ); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+
+		$rows = array();
+		foreach ( (array) $raw as $key => $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$rows[] = array(
+				'repo'    => isset( $row['repo'] ) ? sanitize_text_field( $row['repo'] ) : '',
+				'path'    => isset( $row['path'] ) ? sanitize_text_field( $row['path'] ) : '',
+				'primary' => ( (string) $key === $primary ),
+			);
+		}
+
+		Repos::save( $post_id, $rows );
 	}
 
 	/**
@@ -266,13 +323,8 @@ class ProductGitHubTab {
 		}
 
 		global $post;
-		$product         = $post ? wc_get_product( $post->ID ) : null;
-		$is_variable     = $product && Targets::is_variable( $product );
-		$index          = $post ? ( new Publisher() )->get_index( $post->ID ) : array();
-		$published_keys = array();
-		foreach ( $index as $entry ) {
-			$published_keys[] = $this->entry_key( $entry );
-		}
+		$product     = $post ? wc_get_product( $post->ID ) : null;
+		$is_variable = $product && Targets::is_variable( $product );
 
 		wp_enqueue_style( 'wcgp-admin', WCGP_URL . 'assets/admin.css', array(), WCGP_VERSION );
 		wp_enqueue_script( 'wcgp-admin', WCGP_URL . 'assets/admin.js', array( 'jquery' ), WCGP_VERSION, true );
@@ -280,83 +332,99 @@ class ProductGitHubTab {
 			'wcgp-admin',
 			'wcgpAdmin',
 			array(
-				'ajaxUrl'         => admin_url( 'admin-ajax.php' ),
-				'fetchNonce'      => wp_create_nonce( 'wcgp_fetch' ),
-				'publishNonce'    => wp_create_nonce( 'wcgp_publish' ),
-				'unpublishNonce'  => wp_create_nonce( 'wcgp_unpublish' ),
-				'isVariable'      => (bool) $is_variable,
-				'publishedKeys'   => array_values( array_unique( $published_keys ) ),
-				'i18n'            => array(
-					'fetching'         => __( 'Fetching releases…', 'wc-github-publisher' ),
-					'publishing'       => __( 'Publishing…', 'wc-github-publisher' ),
-					'published'        => __( 'Published', 'wc-github-publisher' ),
-					'publish'          => __( 'Publish', 'wc-github-publisher' ),
-					'publishSel'       => __( 'Publish selected', 'wc-github-publisher' ),
-					'removing'         => __( 'Removing…', 'wc-github-publisher' ),
-					'remove'           => __( 'Remove', 'wc-github-publisher' ),
-					'removed'          => __( 'Removed', 'wc-github-publisher' ),
-					'noReleases'       => __( 'No releases found for this repository.', 'wc-github-publisher' ),
-					'noAssets'         => __( 'No downloadable assets in this release.', 'wc-github-publisher' ),
-					'draft'            => __( 'draft', 'wc-github-publisher' ),
-					'prerelease'       => __( 'pre-release', 'wc-github-publisher' ),
-					'latest'           => __( 'latest', 'wc-github-publisher' ),
-					'error'            => __( 'Something went wrong.', 'wc-github-publisher' ),
-					'confirm'          => __( 'Publish this asset as a downloadable file?', 'wc-github-publisher' ),
-					'confirmRemove'    => __( 'Remove this published file?', 'wc-github-publisher' ),
-					'nothingPublished' => __( 'Nothing published yet.', 'wc-github-publisher' ),
-					/* translators: %s: relative time, e.g. "5m". */
-					'cachedAgo'        => __( 'Cached %s ago', 'wc-github-publisher' ),
-					/* translators: %d: number of remaining GitHub API requests. */
-					'rateLeft'         => __( 'API: %d left', 'wc-github-publisher' ),
-					/* translators: %d: number of variations. */
-					'variations'       => __( '%d variations', 'wc-github-publisher' ),
+				'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
+				'fetchNonce'     => wp_create_nonce( 'wcgp_fetch' ),
+				'publishNonce'   => wp_create_nonce( 'wcgp_publish' ),
+				'unpublishNonce' => wp_create_nonce( 'wcgp_unpublish' ),
+				'isVariable'     => (bool) $is_variable,
+				'i18n'           => array(
+					'primary'           => __( 'primary', 'wc-github-publisher' ),
+					'installPath'       => __( 'install path (optional)', 'wc-github-publisher' ),
+					'removeRepo'        => __( 'Remove repository', 'wc-github-publisher' ),
+					'loading'           => __( 'Loading releases…', 'wc-github-publisher' ),
+					'publishing'        => __( 'Building and publishing bundle…', 'wc-github-publisher' ),
+					'published'         => __( 'Published', 'wc-github-publisher' ),
+					'removing'          => __( 'Removing…', 'wc-github-publisher' ),
+					'remove'            => __( 'Remove', 'wc-github-publisher' ),
+					'removed'           => __( 'Removed', 'wc-github-publisher' ),
+					'noRepos'           => __( 'Add at least one repository, then save the product.', 'wc-github-publisher' ),
+					'noReleases'        => __( 'No releases found.', 'wc-github-publisher' ),
+					'sourceZip'         => __( 'Source code (zip)', 'wc-github-publisher' ),
+					'latest'            => __( 'latest', 'wc-github-publisher' ),
+					'draft'             => __( 'draft', 'wc-github-publisher' ),
+					'prerelease'        => __( 'pre-release', 'wc-github-publisher' ),
+					'error'             => __( 'Something went wrong.', 'wc-github-publisher' ),
+					'confirmPublish'    => __( 'Build and publish this bundle as a downloadable file?', 'wc-github-publisher' ),
+					'confirmRemove'     => __( 'Remove this published file?', 'wc-github-publisher' ),
+					'nothingPublished'  => __( 'Nothing published yet.', 'wc-github-publisher' ),
+					'release'           => __( 'Release', 'wc-github-publisher' ),
+					'asset'             => __( 'Asset', 'wc-github-publisher' ),
+					/* translators: %d: number of bundled components. */
+					'components'        => __( '%d components', 'wc-github-publisher' ),
 				),
 			)
 		);
 	}
 
 	/**
-	 * AJAX: list releases for the entered repository.
+	 * AJAX: list releases for every configured repository.
 	 */
-	public function ajax_fetch() {
+	public function ajax_fetch_bundle() {
 		check_ajax_referer( 'wcgp_fetch', 'nonce' );
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
 			wp_send_json_error( array( 'message' => __( 'Permission denied.', 'wc-github-publisher' ) ) );
 		}
-		$repo  = isset( $_POST['repo'] ) ? sanitize_text_field( wp_unslash( $_POST['repo'] ) ) : '';
-		$force = ! empty( $_POST['force'] );
+		$product_id = isset( $_POST['product'] ) ? absint( $_POST['product'] ) : 0;
+		$force      = ! empty( $_POST['force'] );
+		if ( ! $product_id || ! current_user_can( 'edit_product', $product_id ) ) {
+			wp_send_json_error( array( 'message' => __( 'Permission denied for this product.', 'wc-github-publisher' ) ) );
+		}
 
 		$client = new Client();
 		if ( ! $client->has_token() ) {
 			wp_send_json_error( array( 'message' => __( 'No GitHub token configured.', 'wc-github-publisher' ) ) );
 		}
 
-		$releases = $client->list_releases( $repo, $force );
-		if ( is_wp_error( $releases ) ) {
-			wp_send_json_error( array( 'message' => $releases->get_error_message() ) );
+		$entries = Repos::get( $product_id );
+		if ( empty( $entries ) ) {
+			wp_send_json_error( array( 'message' => __( 'Add at least one repository, then save the product.', 'wc-github-publisher' ) ) );
 		}
-		wp_send_json_success(
-			array(
-				'releases' => $releases,
-				'meta'     => $client->get_meta( $repo ),
-			)
-		);
+
+		$repos = array();
+		foreach ( $entries as $entry ) {
+			$norm     = $client->normalize_repo( $entry['repo'] );
+			$repo_out = array(
+				'repo'     => is_wp_error( $norm ) ? $entry['repo'] : $norm,
+				'primary'  => ! empty( $entry['primary'] ),
+				'error'    => '',
+				'releases' => array(),
+			);
+			if ( is_wp_error( $norm ) ) {
+				$repo_out['error'] = $norm->get_error_message();
+			} else {
+				$releases = $client->list_releases( $norm, $force );
+				if ( is_wp_error( $releases ) ) {
+					$repo_out['error'] = $releases->get_error_message();
+				} else {
+					$repo_out['releases'] = $releases;
+				}
+			}
+			$repos[] = $repo_out;
+		}
+
+		wp_send_json_success( array( 'repos' => $repos ) );
 	}
 
 	/**
-	 * AJAX: publish an asset to a product/variation target.
+	 * AJAX: build and publish a bundle from the per-repo selections.
 	 */
-	public function ajax_publish() {
+	public function ajax_publish_bundle() {
 		check_ajax_referer( 'wcgp_publish', 'nonce' );
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
 			wp_send_json_error( array( 'message' => __( 'Permission denied.', 'wc-github-publisher' ) ) );
 		}
 
 		$product_id = isset( $_POST['product'] ) ? absint( $_POST['product'] ) : 0;
-		$repo       = isset( $_POST['repo'] ) ? sanitize_text_field( wp_unslash( $_POST['repo'] ) ) : '';
-		$asset_id   = isset( $_POST['asset'] ) ? absint( $_POST['asset'] ) : 0;
-		$kind       = isset( $_POST['kind'] ) ? sanitize_text_field( wp_unslash( $_POST['kind'] ) ) : 'asset';
-		$tag        = isset( $_POST['tag'] ) ? sanitize_text_field( wp_unslash( $_POST['tag'] ) ) : '';
 		$attribute  = isset( $_POST['attribute'] ) ? sanitize_text_field( wp_unslash( $_POST['attribute'] ) ) : '';
 		$value      = isset( $_POST['value'] ) ? sanitize_text_field( wp_unslash( $_POST['value'] ) ) : '';
 
@@ -364,42 +432,23 @@ class ProductGitHubTab {
 			wp_send_json_error( array( 'message' => __( 'Permission denied for this product.', 'wc-github-publisher' ) ) );
 		}
 
-		$client = new Client();
-
-		if ( 'zipball' === $kind ) {
-			// Source archive: build a trusted filename server-side from repo + tag.
-			$normalized = $client->normalize_repo( $repo );
-			if ( is_wp_error( $normalized ) ) {
-				wp_send_json_error( array( 'message' => $normalized->get_error_message() ) );
+		$selections = array();
+		$raw        = isset( $_POST['selections'] ) ? wp_unslash( $_POST['selections'] ) : array(); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		foreach ( (array) $raw as $sel ) {
+			if ( ! is_array( $sel ) ) {
+				continue;
 			}
-			if ( '' === $tag ) {
-				wp_send_json_error( array( 'message' => __( 'Missing release tag.', 'wc-github-publisher' ) ) );
-			}
-			$base  = strpos( $normalized, '/' ) !== false ? substr( strrchr( $normalized, '/' ), 1 ) : $normalized;
-			$asset = array(
-				'id'           => 0,
-				'kind'         => 'zipball',
-				'key'          => 'source:zip:' . $tag,
-				'name'         => sanitize_file_name( $base . '-' . $tag . '.zip' ),
-				'size'         => 0,
-				'content_type' => 'application/zip',
+			$selections[] = array(
+				'repo'     => isset( $sel['repo'] ) ? sanitize_text_field( $sel['repo'] ) : '',
+				'tag'      => isset( $sel['tag'] ) ? sanitize_text_field( $sel['tag'] ) : '',
+				'kind'     => isset( $sel['kind'] ) ? sanitize_text_field( $sel['kind'] ) : 'asset',
+				'asset_id' => isset( $sel['asset_id'] ) ? absint( $sel['asset_id'] ) : 0,
 			);
-		} else {
-			if ( ! $asset_id ) {
-				wp_send_json_error( array( 'message' => __( 'Missing asset.', 'wc-github-publisher' ) ) );
-			}
-			// Re-fetch asset metadata from GitHub — never trust the client for name/size.
-			$asset = $client->get_asset( $repo, $asset_id );
-			if ( is_wp_error( $asset ) ) {
-				wp_send_json_error( array( 'message' => $asset->get_error_message() ) );
-			}
 		}
 
-		$result = ( new Publisher() )->publish(
+		$result = ( new Publisher() )->publish_bundle(
 			$product_id,
-			$repo,
-			array( 'tag' => $tag ),
-			$asset,
+			$selections,
 			array(
 				'attribute' => $attribute,
 				'value'     => $value,

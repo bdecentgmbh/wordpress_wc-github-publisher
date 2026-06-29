@@ -13,6 +13,8 @@ namespace WCGP;
 use WCGP\GitHub\Client;
 use WCGP\GitHub\AssetDownloader;
 use WCGP\Security\TokenStore;
+use WCGP\Bundle\Packager;
+use WCGP\Moodle\ComponentMap;
 use WP_Error;
 use WC_Product_Download;
 
@@ -22,7 +24,8 @@ defined( 'ABSPATH' ) || exit;
  * Publisher.
  *
  * Data model:
- * - `_wcgp_repo`       (parent meta)  "owner/repo".
+ * - `_wcgp_repo`       (parent meta)  primary "owner/repo" (legacy / single-repo).
+ * - `_wcgp_repos`      (parent meta)  ordered repo list for bundles (see {@see Repos}).
  * - `_wcgp_managed`    (per-target meta) attached download records for reconcile/prune.
  * - `_wcgp_published`  (parent meta)  index of publish actions for the UI/unpublish.
  */
@@ -83,18 +86,192 @@ class Publisher {
 			return $stored;
 		}
 
+		return $this->finalize(
+			$product,
+			$stored,
+			array(
+				'tag'           => $tag,
+				'asset_id'      => (int) $asset['id'],
+				'asset_key'     => $asset_key,
+				'asset_name'    => $asset['name'],
+				'download_name' => $label,
+				'repo'          => $client->normalize_repo( $repo ),
+			),
+			$attribute,
+			$value,
+			$target_ids
+		);
+	}
+
+	/**
+	 * Download one release asset from each configured repository, package them into
+	 * a single deliverable (a wrapped zip with INSTALL.md when there is more than
+	 * one), and attach it to the resolved target(s).
+	 *
+	 * @param int   $product_id Product id.
+	 * @param array $selections Per-repo selection: [ { repo, tag, kind, asset_id } ].
+	 *                          Defaults to the latest release of each repo, chosen
+	 *                          by the bundle composer.
+	 * @param array $targeting  { attribute?: string, value?: string }.
+	 * @return array|WP_Error Summary or WP_Error.
+	 */
+	public function publish_bundle( $product_id, $selections, $targeting = array() ) {
+		$product = wc_get_product( $product_id );
+		if ( ! $product ) {
+			return new WP_Error( 'wcgp_product', __( 'Product not found.', 'wc-github-publisher' ) );
+		}
+
+		$client = new Client();
+		if ( ! $client->has_token() ) {
+			return new WP_Error( 'wcgp_token', __( 'No GitHub token configured. Add one in WooCommerce → GitHub Publisher.', 'wc-github-publisher' ) );
+		}
+
+		$entries = Repos::get( $product_id );
+		if ( empty( $entries ) ) {
+			return new WP_Error( 'wcgp_no_repos', __( 'No repositories are configured for this product.', 'wc-github-publisher' ) );
+		}
+
+		$attribute  = isset( $targeting['attribute'] ) ? (string) $targeting['attribute'] : '';
+		$value      = isset( $targeting['value'] ) && '' !== $targeting['value'] ? (string) $targeting['value'] : Targets::ALL;
+		$target_ids = Targets::resolve( $product, $attribute, $value );
+		if ( empty( $target_ids ) ) {
+			return new WP_Error( 'wcgp_no_targets', __( 'No variations match that selection.', 'wc-github-publisher' ) );
+		}
+
+		// Index the incoming selections by normalized repo.
+		$by_repo = array();
+		foreach ( (array) $selections as $sel ) {
+			if ( ! is_array( $sel ) || empty( $sel['repo'] ) ) {
+				continue;
+			}
+			$norm = $client->normalize_repo( $sel['repo'] );
+			if ( ! is_wp_error( $norm ) ) {
+				$by_repo[ $norm ] = $sel;
+			}
+		}
+
+		$downloader  = new AssetDownloader( $client );
+		$components  = array();
+		$summary     = array();
+		$primary_tag = '';
+
+		foreach ( $entries as $entry ) {
+			$norm = $client->normalize_repo( $entry['repo'] );
+			if ( is_wp_error( $norm ) ) {
+				$this->cleanup_components( $components );
+				return $norm;
+			}
+			$sel = isset( $by_repo[ $norm ] ) ? $by_repo[ $norm ] : null;
+			$tag = $sel && isset( $sel['tag'] ) ? (string) $sel['tag'] : '';
+			if ( '' === $tag ) {
+				$this->cleanup_components( $components );
+				/* translators: %s: repository. */
+				return new WP_Error( 'wcgp_bundle', sprintf( __( 'No release selected for %s.', 'wc-github-publisher' ), $norm ) );
+			}
+
+			$kind     = isset( $sel['kind'] ) ? (string) $sel['kind'] : 'asset';
+			$asset_id = isset( $sel['asset_id'] ) ? (int) $sel['asset_id'] : 0;
+
+			if ( 'zipball' === $kind ) {
+				$base = strpos( $norm, '/' ) !== false ? substr( strrchr( $norm, '/' ), 1 ) : $norm;
+				$name = sanitize_file_name( $base . '-' . $tag . '.zip' );
+				$tmp  = $downloader->download_archive_to_temp( $norm, $tag, $name );
+			} else {
+				// Re-fetch asset metadata from GitHub — never trust the client for name.
+				$asset = $client->get_asset( $norm, $asset_id );
+				if ( is_wp_error( $asset ) ) {
+					$this->cleanup_components( $components );
+					return $asset;
+				}
+				$name = $asset['name'];
+				$tmp  = $downloader->download_to_temp( $norm, $asset_id, $name );
+			}
+			if ( is_wp_error( $tmp ) ) {
+				$this->cleanup_components( $components );
+				return $tmp;
+			}
+
+			$map          = ComponentMap::resolve( $norm, $entry['path'] );
+			$components[] = array(
+				'file'       => $tmp['file'],
+				'inner_name' => $name,
+				'component'  => $map['component'],
+				'version'    => $this->format_version( $tag ),
+				'target_dir' => $map['target_dir'],
+				'known'      => $map['known'],
+			);
+			$summary[]    = array(
+				'component' => $map['component'],
+				'repo'      => $norm,
+				'tag'       => $tag,
+				'version'   => $this->format_version( $tag ),
+			);
+
+			if ( ! empty( $entry['primary'] ) ) {
+				$primary_tag = $tag;
+			}
+		}
+
+		if ( '' === $primary_tag && ! empty( $summary ) ) {
+			$primary_tag = $summary[0]['tag'];
+		}
+
+		$label    = $this->bundle_label( $product->get_name(), $primary_tag, count( $components ) );
+		$filename = $this->build_filename( $label, 'bundle.zip' );
+
+		$packager = new Packager( $downloader );
+		$stored   = $packager->build( $filename, $product->get_name(), $components );
+		if ( is_wp_error( $stored ) ) {
+			return $stored; // Packager has already cleaned up the component temp files.
+		}
+
+		return $this->finalize(
+			$product,
+			$stored,
+			array(
+				'tag'           => $primary_tag,
+				'asset_id'      => 0,
+				'asset_key'     => 'bundle:' . md5( wp_json_encode( $summary ) ),
+				'asset_name'    => $filename,
+				'download_name' => $label,
+			),
+			$attribute,
+			$value,
+			$target_ids,
+			$summary
+		);
+	}
+
+	/**
+	 * Record a stored file against the target(s): attach to each, write the parent
+	 * publish-index entry, prune, and sweep orphaned files. Shared by single-asset
+	 * and bundle publishing.
+	 *
+	 * @param \WC_Product $product    Parent product.
+	 * @param array       $stored     { file, url } from the downloader/packager.
+	 * @param array       $meta       { tag, asset_id, asset_key, asset_name,
+	 *                                  download_name, repo? }.
+	 * @param string      $attribute  Target attribute.
+	 * @param string      $value      Target value (or Targets::ALL).
+	 * @param int[]       $target_ids Resolved target ids.
+	 * @param array       $components Optional component summary for the UI.
+	 * @return array Summary.
+	 */
+	private function finalize( $product, $stored, $meta, $attribute, $value, $target_ids, $components = array() ) {
+		$product_id   = $product->get_id();
 		$download_id  = wp_generate_uuid4();
 		$published_at = gmdate( 'c' );
-		$record       = array(
+
+		$record = array(
 			'publish_id'    => $download_id,
 			'download_id'   => $download_id,
 			'file'          => $stored['file'],
 			'url'           => $stored['url'],
-			'tag'           => $tag,
-			'asset_id'      => (int) $asset['id'],
-			'asset_key'     => $asset_key,
-			'asset_name'    => $asset['name'],
-			'download_name' => $label,
+			'tag'           => isset( $meta['tag'] ) ? $meta['tag'] : '',
+			'asset_id'      => isset( $meta['asset_id'] ) ? (int) $meta['asset_id'] : 0,
+			'asset_key'     => isset( $meta['asset_key'] ) ? $meta['asset_key'] : '',
+			'asset_name'    => isset( $meta['asset_name'] ) ? $meta['asset_name'] : '',
+			'download_name' => isset( $meta['download_name'] ) ? $meta['download_name'] : '',
 			'published_at'  => $published_at,
 		);
 
@@ -110,37 +287,54 @@ class Publisher {
 		$index[] = array(
 			'publish_id'    => $download_id,
 			'download_id'   => $download_id,
-			'asset_id'      => (int) $asset['id'],
-			'asset_key'     => $asset_key,
-			'asset_name'    => $asset['name'],
-			'download_name' => $label,
-			'tag'           => $tag,
+			'asset_id'      => $record['asset_id'],
+			'asset_key'     => $record['asset_key'],
+			'asset_name'    => $record['asset_name'],
+			'download_name' => $record['download_name'],
+			'tag'           => $record['tag'],
 			'file'          => $stored['file'],
 			'url'           => $stored['url'],
 			'attribute'     => $attribute,
 			'value'         => $value,
 			'variation_ids' => Targets::is_variable( $product ) ? array_map( 'intval', $target_ids ) : array(),
+			'components'    => array_values( $components ),
 			'published_at'  => $published_at,
 		);
 		update_post_meta( $product_id, self::META_PUBLISHED, $index );
-		update_post_meta( $product_id, self::META_REPO, $client->normalize_repo( $repo ) );
+		if ( ! empty( $meta['repo'] ) ) {
+			update_post_meta( $product_id, self::META_REPO, $meta['repo'] );
+		}
 
 		// Delete files orphaned by pruning, and clean their index entries.
 		$this->sweep_orphans( $product, $orphans );
 
 		return array(
 			'publish_id'   => $download_id,
-			'asset_id'     => (int) $asset['id'],
-			'asset_key'    => $asset_key,
-			'asset_name'   => $asset['name'],
-			'tag'          => $tag,
-			'label'        => $label,
+			'asset_id'     => $record['asset_id'],
+			'asset_key'    => $record['asset_key'],
+			'asset_name'   => $record['asset_name'],
+			'tag'          => $record['tag'],
+			'label'        => $record['download_name'],
 			'attribute'    => $attribute,
 			'value'        => $value,
 			'target_label' => $this->target_label( $attribute, $value ),
 			'targets'      => count( $target_ids ),
+			'components'   => array_values( $components ),
 			'published_at' => $published_at,
 		);
+	}
+
+	/**
+	 * Delete any component temp files (used when a bundle aborts mid-assembly).
+	 *
+	 * @param array $components Partial component list with temp 'file' paths.
+	 */
+	private function cleanup_components( $components ) {
+		foreach ( (array) $components as $c ) {
+			if ( ! empty( $c['file'] ) && file_exists( $c['file'] ) ) {
+				@unlink( $c['file'] ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			}
+		}
 	}
 
 	/**
@@ -327,6 +521,21 @@ class Publisher {
 	}
 
 	/**
+	 * Build the label for a published bundle. Multi-component bundles get a
+	 * " — UNZIP ME" suffix so customers know the download must be unpacked before
+	 * it can be installed into Moodle.
+	 *
+	 * @param string $product_name    Product title.
+	 * @param string $primary_tag     Tag of the primary repo (drives the version).
+	 * @param int    $component_count Number of components in the bundle.
+	 * @return string
+	 */
+	public function bundle_label( $product_name, $primary_tag, $component_count ) {
+		$label = $this->build_label( $product_name, $primary_tag );
+		return $component_count > 1 ? $label . ' — UNZIP ME' : $label;
+	}
+
+	/**
 	 * Turn a release tag into a display version: drop a leading "v", turn dashes
 	 * into spaces, and capitalise a letter that prefixes a number (e.g. the "r" in
 	 * a Moodle release marker). "v1.1-r3" => "1.1 R3".
@@ -358,7 +567,10 @@ class Publisher {
 	 */
 	private function build_filename( $label, $original ) {
 		$ext = pathinfo( (string) $original, PATHINFO_EXTENSION );
-		return $ext ? $label . '.' . $ext : $label;
+		// Normalize the em dash used in bundle labels ("— UNZIP ME") to a hyphen so
+		// the on-disk filename stays ASCII-clean (WordPress keeps multibyte dashes).
+		$base = str_replace( '—', '-', (string) $label );
+		return $ext ? $base . '.' . $ext : $base;
 	}
 
 	/**

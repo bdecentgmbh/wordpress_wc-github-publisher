@@ -287,6 +287,34 @@ class Client {
 	}
 
 	/**
+	 * Pick the default component asset for a shaped release: the first uploaded
+	 * `.zip` asset, else the first uploaded asset, else the source-zip fallback.
+	 * Used to pre-select a sensible asset per repo in the bundle composer.
+	 *
+	 * @param array $release Shaped release (see {@see shape_release()}).
+	 * @return array|null Asset shape, or null when the release has no assets.
+	 */
+	public function default_component_asset( $release ) {
+		$assets = isset( $release['assets'] ) && is_array( $release['assets'] ) ? $release['assets'] : array();
+		if ( empty( $assets ) ) {
+			return null;
+		}
+		foreach ( $assets as $asset ) {
+			$name = isset( $asset['name'] ) ? strtolower( $asset['name'] ) : '';
+			if ( 'asset' === ( isset( $asset['kind'] ) ? $asset['kind'] : '' ) && '.zip' === substr( $name, -4 ) ) {
+				return $asset;
+			}
+		}
+		foreach ( $assets as $asset ) {
+			if ( 'asset' === ( isset( $asset['kind'] ) ? $asset['kind'] : '' ) ) {
+				return $asset;
+			}
+		}
+		// Only the source-zip fallback is present.
+		return $assets[0];
+	}
+
+	/**
 	 * Fetch a single asset's metadata. Always live (no cache) so size and name
 	 * are trusted at publish time.
 	 *

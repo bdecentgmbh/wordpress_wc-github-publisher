@@ -7,7 +7,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Planned
+- Optional **email notification** to a configurable address when a new release is
+  published.
+
+## [0.5.0]
+
 ### Added
+- **Multi-repository bundles.** A product can publish from several repositories
+  at once (e.g. Video Time = `mod_videotime` + `filter_videotime` +
+  `tiny_videotime`). The download becomes a single zip containing one release
+  asset per repo plus an auto-generated `INSTALL.md`, and its name ends in
+  `— UNZIP ME` so customers unpack it before installing into Moodle.
+- Per-repo release selection (latest by default, overridable); the **primary**
+  repo's version names the bundle.
+- INSTALL.md install paths are derived from each repo name
+  (`moodle-{type}_{name}` → Moodle plugin directory) via a built-in type table,
+  with an optional per-repo override.
 - Project documentation and developer tooling: `README.md`, this changelog, a
   `LICENSE` file (GPL-2.0), and a PHPUnit unit-test suite with CI.
 
@@ -17,10 +33,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   and tag. The stored file uses the same name with dashes
   (`Media-Time-1.1-R3.zip`), since WordPress sanitizes spaces out of upload
   filenames.
-
-### Planned
-- Optional **email notification** to a configurable address when a new release is
-  published.
+- A single-repository product is unchanged: the asset is attached directly, with
+  no wrapping.
 
 ## [0.4.1]
 
@@ -70,7 +84,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 - Initial release: GitHub token settings, product GitHub tab, fetch releases,
   publish an asset as a WooCommerce downloadable file, retention pruning.
 
-[Unreleased]: https://github.com/bdecentgmbh/wordpress_wc-github-publisher/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/bdecentgmbh/wordpress_wc-github-publisher/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/bdecentgmbh/wordpress_wc-github-publisher/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/bdecentgmbh/wordpress_wc-github-publisher/releases/tag/v0.4.1
 [0.4.0]: https://github.com/bdecentgmbh/wordpress_wc-github-publisher/releases/tag/v0.4.0
 [0.3.0]: https://github.com/bdecentgmbh/wordpress_wc-github-publisher/releases/tag/v0.3.0

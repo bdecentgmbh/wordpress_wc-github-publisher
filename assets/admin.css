@@ -1,82 +1,60 @@
-.wcgp-release {
+/* Repository repeater */
+.wcgp-repo-row .wcgp-remove-repo {
+	color: #b32d2e;
+	font-size: 18px;
+	line-height: 1;
+	text-decoration: none;
+}
+
+/* Bundle composer */
+.wcgp-crepo {
 	padding: 8px 0;
 	border-top: 1px solid #eee;
 }
 
-.wcgp-release:first-child {
+.wcgp-crepo:first-child {
 	border-top: 0;
 }
 
-.wcgp-release h4 {
-	margin: 6px 0;
+.wcgp-crepo-head {
+	margin-bottom: 4px;
 }
 
-.wcgp-badge {
+.wcgp-primary-badge {
 	display: inline-block;
 	font-size: 11px;
 	line-height: 1.6;
 	padding: 0 6px;
 	border-radius: 3px;
 	color: #fff;
+	background: #2271b1;
 	vertical-align: middle;
 }
 
-.wcgp-badge.wcgp-latest {
-	background: #2271b1;
+.wcgp-crepo-controls label {
+	margin-right: 12px;
 }
 
-.wcgp-badge.wcgp-draft {
-	background: #777;
+.wcgp-crepo-controls select {
+	max-width: 320px;
 }
 
-.wcgp-badge.wcgp-pre {
-	background: #b26500;
+.wcgp-crepo-error,
+.wcgp-error {
+	color: #b32d2e;
 }
 
-.wcgp-assets {
-	margin: 0 0 0 4px;
-}
-
-.wcgp-assets li {
-	margin: 4px 0;
-}
-
-.wcgp-asset-name {
-	font-weight: 600;
-}
-
-.wcgp-asset-size {
-	color: #777;
-	margin-right: 6px;
-}
-
+/* Status text */
 .wcgp-status {
 	margin-left: 6px;
 	font-size: 12px;
 }
 
-.wcgp-status.wcgp-ok {
-	color: #1a7f37;
-}
-
-.wcgp-status.wcgp-error,
-.wcgp-error {
-	color: #b32d2e;
-}
-
-.wcgp-badge.wcgp-published {
-	background: #1a7f37;
-}
-
-.wcgp-publish-selected {
-	margin: 6px 0 2px 4px;
-}
-
-#wcgp-meta {
+#wcgp-publish-status {
 	margin-left: 8px;
-	color: #777;
 }
 
+/* Published list */
 #wcgp-published {
 	list-style: none;
 }
@@ -94,9 +72,15 @@
 	font-weight: 600;
 }
 
+.wcgp-managed-components {
+	color: #777;
+	margin-left: 6px;
+	font-size: 12px;
+}
+
 .wcgp-managed-target {
 	color: #2271b1;
-	margin-right: 4px;
+	margin: 0 4px;
 }
 
 .wcgp-managed-date {
