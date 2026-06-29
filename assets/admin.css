@@ -1,0 +1,114 @@
+.wcgp-release {
+	padding: 8px 0;
+	border-top: 1px solid #eee;
+}
+
+.wcgp-release:first-child {
+	border-top: 0;
+}
+
+.wcgp-release h4 {
+	margin: 6px 0;
+}
+
+.wcgp-badge {
+	display: inline-block;
+	font-size: 11px;
+	line-height: 1.6;
+	padding: 0 6px;
+	border-radius: 3px;
+	color: #fff;
+	vertical-align: middle;
+}
+
+.wcgp-badge.wcgp-latest {
+	background: #2271b1;
+}
+
+.wcgp-badge.wcgp-draft {
+	background: #777;
+}
+
+.wcgp-badge.wcgp-pre {
+	background: #b26500;
+}
+
+.wcgp-assets {
+	margin: 0 0 0 4px;
+}
+
+.wcgp-assets li {
+	margin: 4px 0;
+}
+
+.wcgp-asset-name {
+	font-weight: 600;
+}
+
+.wcgp-asset-size {
+	color: #777;
+	margin-right: 6px;
+}
+
+.wcgp-status {
+	margin-left: 6px;
+	font-size: 12px;
+}
+
+.wcgp-status.wcgp-ok {
+	color: #1a7f37;
+}
+
+.wcgp-status.wcgp-error,
+.wcgp-error {
+	color: #b32d2e;
+}
+
+.wcgp-badge.wcgp-published {
+	background: #1a7f37;
+}
+
+.wcgp-publish-selected {
+	margin: 6px 0 2px 4px;
+}
+
+#wcgp-meta {
+	margin-left: 8px;
+	color: #777;
+}
+
+#wcgp-published {
+	list-style: none;
+}
+
+#wcgp-published li.wcgp-managed {
+	padding: 3px 0;
+	border-top: 1px solid #f0f0f0;
+}
+
+#wcgp-published li.wcgp-managed:first-child {
+	border-top: 0;
+}
+
+.wcgp-managed-label {
+	font-weight: 600;
+}
+
+.wcgp-managed-target {
+	color: #2271b1;
+	margin-right: 4px;
+}
+
+.wcgp-managed-date {
+	color: #777;
+	margin-right: 6px;
+}
+
+.wcgp-remove {
+	color: #b32d2e;
+}
+
+.wcgp-empty {
+	color: #777;
+	font-style: italic;
+}
