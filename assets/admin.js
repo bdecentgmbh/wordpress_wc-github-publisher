@@ -50,10 +50,10 @@
 	$( document ).on( 'click', '#wcgp-add-repo', function () {
 		var idx = repoSeq++;
 		var row =
-			'<div class="wcgp-repo-row form-field" style="padding:0 12px 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
-			'<input type="text" class="wcgp-repo-input" name="wcgp_repos[' + idx + '][repo]" value="" placeholder="owner/moodle-mod_example" style="flex:1 1 240px;" />' +
-			'<input type="text" class="wcgp-repo-path" name="wcgp_repos[' + idx + '][path]" value="" placeholder="' + esc( i18n.installPath ) + '" style="flex:0 1 200px;" />' +
-			'<label style="white-space:nowrap;"><input type="radio" name="wcgp_repos_primary" value="' + idx + '" /> ' + esc( i18n.primary ) + '</label>' +
+			'<div class="wcgp-repo-row">' +
+			'<input type="text" class="wcgp-repo-input" name="wcgp_repos[' + idx + '][repo]" value="" placeholder="owner/moodle-mod_example" />' +
+			'<input type="text" class="wcgp-repo-path" name="wcgp_repos[' + idx + '][path]" value="" placeholder="' + esc( i18n.installPath ) + '" />' +
+			'<label class="wcgp-primary-label"><input type="radio" name="wcgp_repos_primary" value="' + idx + '" /> ' + esc( i18n.primary ) + '</label>' +
 			'<button type="button" class="button-link wcgp-remove-repo" title="' + esc( i18n.removeRepo ) + '">&times;</button>' +
 			'</div>';
 		$( '#wcgp-repos' ).append( row );

@@ -146,13 +146,13 @@ class ProductGitHubTab {
 				<p class="description" style="padding:0 12px;">
 					<?php esc_html_e( 'Save the product after changing repositories, then load releases. Publishing attaches the bundle immediately — reload to see it under the Downloadable files list.', 'wc-github-publisher' ); ?>
 				</p>
-				<div id="wcgp-composer" style="padding:0 12px 12px;"></div>
-				<p class="form-field" id="wcgp-publish-wrap" style="display:none;padding:0 12px 12px;">
+				<div id="wcgp-composer" class="wcgp-composer"></div>
+				<div class="wcgp-actions" id="wcgp-publish-wrap" style="display:none;">
 					<button type="button" class="button button-primary" id="wcgp-publish-bundle" data-product="<?php echo esc_attr( $post->ID ); ?>">
 						<?php esc_html_e( 'Publish bundle', 'wc-github-publisher' ); ?>
 					</button>
 					<span id="wcgp-publish-status" class="description"></span>
-				</p>
+				</div>
 			</div>
 		</div>
 		<?php
@@ -169,13 +169,13 @@ class ProductGitHubTab {
 		$path    = isset( $entry['path'] ) ? $entry['path'] : '';
 		$primary = ! empty( $entry['primary'] );
 		?>
-		<div class="wcgp-repo-row form-field" style="padding:0 12px 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+		<div class="wcgp-repo-row">
 			<input type="text" class="wcgp-repo-input" name="wcgp_repos[<?php echo esc_attr( $index ); ?>][repo]"
-				value="<?php echo esc_attr( $repo ); ?>" placeholder="owner/moodle-mod_example" style="flex:1 1 240px;" />
+				value="<?php echo esc_attr( $repo ); ?>" placeholder="owner/moodle-mod_example" />
 			<input type="text" class="wcgp-repo-path" name="wcgp_repos[<?php echo esc_attr( $index ); ?>][path]"
 				value="<?php echo esc_attr( $path ); ?>" placeholder="<?php esc_attr_e( 'install path (optional)', 'wc-github-publisher' ); ?>"
-				title="<?php esc_attr_e( 'Override the auto-derived Moodle install path for INSTALL.md', 'wc-github-publisher' ); ?>" style="flex:0 1 200px;" />
-			<label style="white-space:nowrap;">
+				title="<?php esc_attr_e( 'Override the auto-derived Moodle install path for INSTALL.md', 'wc-github-publisher' ); ?>" />
+			<label class="wcgp-primary-label">
 				<input type="radio" name="wcgp_repos_primary" value="<?php echo esc_attr( $index ); ?>" <?php checked( $primary ); ?> />
 				<?php esc_html_e( 'primary', 'wc-github-publisher' ); ?>
 			</label>

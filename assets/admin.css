@@ -1,5 +1,45 @@
+/*
+ * Styles are scoped to #wcgp_product_data so we can neutralize WooCommerce's
+ * .form-field rules (which float labels/inputs with negative margins) inside our
+ * custom flex layouts without affecting the rest of the product panel.
+ */
+
 /* Repository repeater */
-.wcgp-repo-row .wcgp-remove-repo {
+#wcgp_product_data .wcgp-repo-row {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	flex-wrap: wrap;
+	padding: 0 12px 8px;
+}
+
+#wcgp_product_data .wcgp-repo-row input[type="text"] {
+	float: none;
+	width: auto;
+	margin: 0;
+}
+
+#wcgp_product_data .wcgp-repo-row .wcgp-repo-input {
+	flex: 1 1 260px;
+}
+
+#wcgp_product_data .wcgp-repo-row .wcgp-repo-path {
+	flex: 0 1 200px;
+}
+
+#wcgp_product_data .wcgp-repo-row .wcgp-primary-label {
+	float: none;
+	width: auto;
+	margin: 0;
+	padding: 0;
+	white-space: nowrap;
+}
+
+#wcgp_product_data .wcgp-repo-row .wcgp-primary-label input[type="radio"] {
+	margin: 0 4px 0 0;
+}
+
+#wcgp_product_data .wcgp-repo-row .wcgp-remove-repo {
 	color: #b32d2e;
 	font-size: 18px;
 	line-height: 1;
@@ -7,17 +47,45 @@
 }
 
 /* Bundle composer */
-.wcgp-crepo {
+#wcgp_product_data .wcgp-composer {
+	padding: 0 12px 12px;
+}
+
+#wcgp_product_data .wcgp-crepo {
 	padding: 8px 0;
 	border-top: 1px solid #eee;
 }
 
-.wcgp-crepo:first-child {
+#wcgp_product_data .wcgp-crepo:first-child {
 	border-top: 0;
 }
 
-.wcgp-crepo-head {
+#wcgp_product_data .wcgp-crepo-head {
 	margin-bottom: 4px;
+}
+
+#wcgp_product_data .wcgp-crepo-controls {
+	display: flex;
+	gap: 16px;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+#wcgp_product_data .wcgp-crepo-controls label {
+	float: none;
+	width: auto;
+	margin: 0;
+	padding: 0;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+#wcgp_product_data .wcgp-crepo-controls select {
+	float: none;
+	width: auto;
+	max-width: 360px;
+	margin: 0;
 }
 
 .wcgp-primary-badge {
@@ -31,27 +99,24 @@
 	vertical-align: middle;
 }
 
-.wcgp-crepo-controls label {
-	margin-right: 12px;
-}
-
-.wcgp-crepo-controls select {
-	max-width: 320px;
-}
-
 .wcgp-crepo-error,
 .wcgp-error {
 	color: #b32d2e;
+}
+
+/* Actions */
+#wcgp_product_data .wcgp-actions {
+	padding: 0 12px 12px;
+}
+
+#wcgp-publish-status {
+	margin-left: 8px;
 }
 
 /* Status text */
 .wcgp-status {
 	margin-left: 6px;
 	font-size: 12px;
-}
-
-#wcgp-publish-status {
-	margin-left: 8px;
 }
 
 /* Published list */
