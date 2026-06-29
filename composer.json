@@ -3,12 +3,33 @@
 	"description": "Publish GitHub release assets as WooCommerce downloadable product files.",
 	"type": "wordpress-plugin",
 	"license": "GPL-2.0-or-later",
+	"homepage": "https://github.com/bdecentgmbh/wordpress_wc-github-publisher",
+	"authors": [
+		{
+			"name": "bdecent gmbh",
+			"homepage": "https://bdecent.de"
+		}
+	],
 	"require": {
 		"php": ">=7.4"
+	},
+	"require-dev": {
+		"phpunit/phpunit": "^9.6"
 	},
 	"autoload": {
 		"psr-4": {
 			"WCGP\\": "src/"
 		}
+	},
+	"autoload-dev": {
+		"psr-4": {
+			"WCGP\\Tests\\": "tests/"
+		}
+	},
+	"scripts": {
+		"test": "phpunit"
+	},
+	"config": {
+		"sort-packages": true
 	}
 }

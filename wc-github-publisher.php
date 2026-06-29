@@ -1,10 +1,11 @@
 <?php
 /**
  * Plugin Name:       WC GitHub Publisher
- * Plugin URI:        https://github.com/stefanscholz/jannik
+ * Plugin URI:        https://github.com/bdecentgmbh/wordpress_wc-github-publisher
  * Description:       Publish GitHub release assets (including from private repositories) as native WooCommerce downloadable product files. The plugin only handles the publish step — WooCommerce handles entitlement, the My Account downloads page, and secure serving.
  * Version:           0.4.1
- * Author:            bdecent
+ * Author:            bdecent gmbh
+ * Author URI:        https://bdecent.de
  * Text Domain:       wc-github-publisher
  * Domain Path:       /languages
  * Requires at least: 6.4
