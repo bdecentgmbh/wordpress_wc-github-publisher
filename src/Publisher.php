@@ -67,11 +67,17 @@ class Publisher {
 		$kind      = isset( $asset['kind'] ) ? $asset['kind'] : 'asset';
 		$asset_key = isset( $asset['key'] ) ? $asset['key'] : 'asset:' . (int) $asset['id'];
 
+		// Human-friendly name from the product title + release version, e.g.
+		// "Media Time 1.1 R3". Used as the download label and the stored filename
+		// (spaces become dashes once WordPress sanitizes the upload filename).
+		$label     = $this->build_label( $product->get_name(), $tag );
+		$file_name = $this->build_filename( $label, $asset['name'] );
+
 		$downloader = new AssetDownloader( $client );
 		if ( 'zipball' === $kind ) {
-			$stored = $downloader->download_archive( $repo, $tag, $asset['name'] );
+			$stored = $downloader->download_archive( $repo, $tag, $file_name );
 		} else {
-			$stored = $downloader->download( $repo, $asset['id'], $asset['name'] );
+			$stored = $downloader->download( $repo, $asset['id'], $file_name );
 		}
 		if ( is_wp_error( $stored ) ) {
 			return $stored;
@@ -80,15 +86,16 @@ class Publisher {
 		$download_id  = wp_generate_uuid4();
 		$published_at = gmdate( 'c' );
 		$record       = array(
-			'publish_id'   => $download_id,
-			'download_id'  => $download_id,
-			'file'         => $stored['file'],
-			'url'          => $stored['url'],
-			'tag'          => $tag,
-			'asset_id'     => (int) $asset['id'],
-			'asset_key'    => $asset_key,
-			'asset_name'   => $asset['name'],
-			'published_at' => $published_at,
+			'publish_id'    => $download_id,
+			'download_id'   => $download_id,
+			'file'          => $stored['file'],
+			'url'           => $stored['url'],
+			'tag'           => $tag,
+			'asset_id'      => (int) $asset['id'],
+			'asset_key'     => $asset_key,
+			'asset_name'    => $asset['name'],
+			'download_name' => $label,
+			'published_at'  => $published_at,
 		);
 
 		$orphans = array();
@@ -106,6 +113,7 @@ class Publisher {
 			'asset_id'      => (int) $asset['id'],
 			'asset_key'     => $asset_key,
 			'asset_name'    => $asset['name'],
+			'download_name' => $label,
 			'tag'           => $tag,
 			'file'          => $stored['file'],
 			'url'           => $stored['url'],
@@ -126,7 +134,7 @@ class Publisher {
 			'asset_key'    => $asset_key,
 			'asset_name'   => $asset['name'],
 			'tag'          => $tag,
-			'label'        => $this->build_label( $asset['name'], $tag ),
+			'label'        => $label,
 			'attribute'    => $attribute,
 			'value'        => $value,
 			'target_label' => $this->target_label( $attribute, $value ),
@@ -233,19 +241,20 @@ class Publisher {
 			}
 			$download = new WC_Product_Download();
 			$download->set_id( $entry['download_id'] );
-			$download->set_name( $this->build_label( $entry['asset_name'], isset( $entry['tag'] ) ? $entry['tag'] : '' ) );
+			$download->set_name( $this->label_for( $entry ) );
 			$download->set_file( $entry['url'] );
 			$downloads[ $entry['download_id'] ] = $download;
 
 			$managed[] = array(
-				'publish_id'   => $entry['publish_id'],
-				'download_id'  => $entry['download_id'],
-				'file'         => isset( $entry['file'] ) ? $entry['file'] : '',
-				'url'          => $entry['url'],
-				'tag'          => isset( $entry['tag'] ) ? $entry['tag'] : '',
-				'asset_id'     => isset( $entry['asset_id'] ) ? (int) $entry['asset_id'] : 0,
-				'asset_name'   => $entry['asset_name'],
-				'published_at' => isset( $entry['published_at'] ) ? $entry['published_at'] : gmdate( 'c' ),
+				'publish_id'    => $entry['publish_id'],
+				'download_id'   => $entry['download_id'],
+				'file'          => isset( $entry['file'] ) ? $entry['file'] : '',
+				'url'           => $entry['url'],
+				'tag'           => isset( $entry['tag'] ) ? $entry['tag'] : '',
+				'asset_id'      => isset( $entry['asset_id'] ) ? (int) $entry['asset_id'] : 0,
+				'asset_name'    => $entry['asset_name'],
+				'download_name' => $this->label_for( $entry ),
+				'published_at'  => isset( $entry['published_at'] ) ? $entry['published_at'] : gmdate( 'c' ),
 			);
 			$attached_any = true;
 
@@ -292,7 +301,7 @@ class Publisher {
 			}
 			$download = new WC_Product_Download();
 			$download->set_id( $item['download_id'] );
-			$download->set_name( $this->build_label( $item['asset_name'], isset( $item['tag'] ) ? $item['tag'] : '' ) );
+			$download->set_name( $this->label_for( $item ) );
 			$download->set_file( $item['url'] );
 			$downloads[ $item['download_id'] ] = $download;
 			$changed                           = true;
@@ -305,14 +314,68 @@ class Publisher {
 	}
 
 	/**
-	 * Build a human-friendly download label.
+	 * Build a human-friendly download label from the product title and release
+	 * version, e.g. ( "Media Time", "v1.1-r3" ) => "Media Time 1.1 R3".
 	 *
-	 * @param string $asset_name Asset filename.
-	 * @param string $tag        Release tag.
+	 * @param string $product_name Product title.
+	 * @param string $tag          Release tag.
 	 * @return string
 	 */
-	public function build_label( $asset_name, $tag ) {
-		return $tag ? $asset_name . ' (' . $tag . ')' : $asset_name;
+	public function build_label( $product_name, $tag ) {
+		$version = $this->format_version( $tag );
+		return '' !== $version ? trim( $product_name . ' ' . $version ) : $product_name;
+	}
+
+	/**
+	 * Turn a release tag into a display version: drop a leading "v", turn dashes
+	 * into spaces, and capitalise a letter that prefixes a number (e.g. the "r" in
+	 * a Moodle release marker). "v1.1-r3" => "1.1 R3".
+	 *
+	 * @param string $tag Release tag.
+	 * @return string
+	 */
+	private function format_version( $tag ) {
+		$version = preg_replace( '/^v(?=\d)/i', '', (string) $tag );
+		$version = str_replace( '-', ' ', $version );
+		$version = preg_replace_callback(
+			'/(?<=\s|^)([a-z])(?=\d)/i',
+			static function ( $m ) {
+				return strtoupper( $m[1] );
+			},
+			$version
+		);
+		return trim( $version );
+	}
+
+	/**
+	 * Build the on-disk filename from the display label, preserving the asset's
+	 * extension. "Media Time 1.1 R3" + ".zip" => "Media Time 1.1 R3.zip" (WordPress
+	 * then sanitises spaces to dashes when the file is stored).
+	 *
+	 * @param string $label    Display label.
+	 * @param string $original Original asset filename (for its extension).
+	 * @return string
+	 */
+	private function build_filename( $label, $original ) {
+		$ext = pathinfo( (string) $original, PATHINFO_EXTENSION );
+		return $ext ? $label . '.' . $ext : $label;
+	}
+
+	/**
+	 * Resolve a record's download label, preferring the stored display name and
+	 * falling back to the legacy "asset (tag)" form for records created before the
+	 * product-title naming was introduced.
+	 *
+	 * @param array $record Managed/index record.
+	 * @return string
+	 */
+	public function label_for( $record ) {
+		if ( ! empty( $record['download_name'] ) ) {
+			return $record['download_name'];
+		}
+		$name = isset( $record['asset_name'] ) ? $record['asset_name'] : '';
+		$tag  = isset( $record['tag'] ) ? $record['tag'] : '';
+		return $tag ? $name . ' (' . $tag . ')' : $name;
 	}
 
 	/**
@@ -347,7 +410,7 @@ class Publisher {
 		$downloads = $target->get_downloads();
 		$download  = new WC_Product_Download();
 		$download->set_id( $download_id );
-		$download->set_name( $this->build_label( $record['asset_name'], $record['tag'] ) );
+		$download->set_name( $this->label_for( $record ) );
 		$download->set_file( $stored['url'] );
 		$downloads[ $download_id ] = $download;
 

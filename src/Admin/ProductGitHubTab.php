@@ -176,7 +176,7 @@ class ProductGitHubTab {
 	 */
 	private function render_published_row( $entry, $is_variable ) {
 		$publisher = new Publisher();
-		$label     = $publisher->build_label( $entry['asset_name'], isset( $entry['tag'] ) ? $entry['tag'] : '' );
+		$label     = $publisher->label_for( $entry );
 		$date      = ! empty( $entry['published_at'] ) ? mysql2date( get_option( 'date_format' ), $entry['published_at'] ) : '';
 		$target    = '';
 		if ( $is_variable ) {
