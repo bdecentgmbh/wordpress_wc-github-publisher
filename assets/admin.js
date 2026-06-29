@@ -43,6 +43,25 @@
 		return { attribute: parts[ 0 ] || '', value: parts[ 1 ] || '' };
 	}
 
+	// Read the live repeater rows so loading/publishing reflects the current form
+	// (no product save required).
+	function collectRepos() {
+		var repos = [];
+		$( '#wcgp-repos .wcgp-repo-row' ).each( function () {
+			var $row = $( this );
+			var repo = $.trim( $row.find( '.wcgp-repo-input' ).val() || '' );
+			if ( ! repo ) {
+				return;
+			}
+			repos.push( {
+				repo: repo,
+				path: $.trim( $row.find( '.wcgp-repo-path' ).val() || '' ),
+				primary: $row.find( 'input[type=radio]' ).is( ':checked' ) ? 1 : 0
+			} );
+		} );
+		return repos;
+	}
+
 	/* ----------------------------------------------------------------- Repeater */
 
 	var repoSeq = 1000; // New-row indices; existing rows are rendered server-side.
@@ -187,7 +206,8 @@
 			action: 'wcgp_fetch_bundle',
 			nonce: wcgpAdmin.fetchNonce,
 			product: productId(),
-			force: force ? 1 : 0
+			force: force ? 1 : 0,
+			repos: collectRepos()
 		} )
 			.done( function ( res ) {
 				if ( res && res.success && res.data && res.data.repos ) {
@@ -273,7 +293,8 @@
 			product: productId(),
 			attribute: target.attribute,
 			value: target.value,
-			selections: selections
+			selections: selections,
+			repos: collectRepos()
 		} )
 			.done( function ( res ) {
 				if ( res && res.success ) {

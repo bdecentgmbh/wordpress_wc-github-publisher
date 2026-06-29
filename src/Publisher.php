@@ -108,14 +108,17 @@ class Publisher {
 	 * a single deliverable (a wrapped zip with INSTALL.md when there is more than
 	 * one), and attach it to the resolved target(s).
 	 *
-	 * @param int   $product_id Product id.
-	 * @param array $selections Per-repo selection: [ { repo, tag, kind, asset_id } ].
-	 *                          Defaults to the latest release of each repo, chosen
-	 *                          by the bundle composer.
-	 * @param array $targeting  { attribute?: string, value?: string }.
+	 * @param int        $product_id Product id.
+	 * @param array      $selections Per-repo selection: [ { repo, tag, kind, asset_id } ].
+	 *                               Defaults to the latest release of each repo,
+	 *                               chosen by the bundle composer.
+	 * @param array      $targeting  { attribute?: string, value?: string }.
+	 * @param array|null $repos      Explicit repo list (from the live editor), each
+	 *                               { repo, primary?, path? }. When null/empty the
+	 *                               product's saved repo list is used.
 	 * @return array|WP_Error Summary or WP_Error.
 	 */
-	public function publish_bundle( $product_id, $selections, $targeting = array() ) {
+	public function publish_bundle( $product_id, $selections, $targeting = array(), $repos = null ) {
 		$product = wc_get_product( $product_id );
 		if ( ! $product ) {
 			return new WP_Error( 'wcgp_product', __( 'Product not found.', 'wc-github-publisher' ) );
@@ -126,7 +129,7 @@ class Publisher {
 			return new WP_Error( 'wcgp_token', __( 'No GitHub token configured. Add one in WooCommerce → GitHub Publisher.', 'wc-github-publisher' ) );
 		}
 
-		$entries = Repos::get( $product_id );
+		$entries = ( is_array( $repos ) && ! empty( $repos ) ) ? Repos::normalize( $repos ) : Repos::get( $product_id );
 		if ( empty( $entries ) ) {
 			return new WP_Error( 'wcgp_no_repos', __( 'No repositories are configured for this product.', 'wc-github-publisher' ) );
 		}

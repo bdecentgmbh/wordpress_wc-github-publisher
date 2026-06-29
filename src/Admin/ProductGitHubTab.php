@@ -144,7 +144,7 @@ class ProductGitHubTab {
 					<span class="spinner" style="float:none;margin-top:0;"></span>
 				</p>
 				<p class="description" style="padding:0 12px;">
-					<?php esc_html_e( 'Save the product after changing repositories, then load releases. Publishing attaches the bundle immediately — reload to see it under the Downloadable files list.', 'wc-github-publisher' ); ?>
+					<?php esc_html_e( 'Load releases uses the repositories above, even before saving. Publishing attaches the bundle immediately — reload to see it under the Downloadable files list. Save the product to keep your repository list.', 'wc-github-publisher' ); ?>
 				</p>
 				<div id="wcgp-composer" class="wcgp-composer"></div>
 				<div class="wcgp-actions" id="wcgp-publish-wrap" style="display:none;">
@@ -367,6 +367,52 @@ class ProductGitHubTab {
 	}
 
 	/**
+	 * Read the repository list posted from the live editor (the repeater rows), so
+	 * "Load releases" and "Publish bundle" reflect the current form without needing
+	 * the product to be saved first. Returns null when no list was posted.
+	 *
+	 * The caller must have already verified the AJAX nonce + capability.
+	 *
+	 * @return array|null Raw repo rows ([ { repo, primary, path } ]) or null.
+	 */
+	private function posted_repos() {
+		if ( ! isset( $_POST['repos'] ) || ! is_array( $_POST['repos'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			return null;
+		}
+		$raw  = wp_unslash( $_POST['repos'] ); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$rows = array();
+		foreach ( (array) $raw as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$rows[] = array(
+				'repo'    => isset( $row['repo'] ) ? sanitize_text_field( $row['repo'] ) : '',
+				'path'    => isset( $row['path'] ) ? sanitize_text_field( $row['path'] ) : '',
+				'primary' => ! empty( $row['primary'] ),
+			);
+		}
+		return $rows;
+	}
+
+	/**
+	 * Normalized repo entries for an AJAX request: the live posted list when
+	 * present, otherwise the product's saved list.
+	 *
+	 * @param int $product_id Product id.
+	 * @return array
+	 */
+	private function resolve_entries( $product_id ) {
+		$posted = $this->posted_repos();
+		if ( null !== $posted ) {
+			$entries = Repos::normalize( $posted );
+			if ( ! empty( $entries ) ) {
+				return $entries;
+			}
+		}
+		return Repos::get( $product_id );
+	}
+
+	/**
 	 * AJAX: list releases for every configured repository.
 	 */
 	public function ajax_fetch_bundle() {
@@ -385,9 +431,9 @@ class ProductGitHubTab {
 			wp_send_json_error( array( 'message' => __( 'No GitHub token configured.', 'wc-github-publisher' ) ) );
 		}
 
-		$entries = Repos::get( $product_id );
+		$entries = $this->resolve_entries( $product_id );
 		if ( empty( $entries ) ) {
-			wp_send_json_error( array( 'message' => __( 'Add at least one repository, then save the product.', 'wc-github-publisher' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Add at least one repository first.', 'wc-github-publisher' ) ) );
 		}
 
 		$repos = array();
@@ -452,7 +498,8 @@ class ProductGitHubTab {
 			array(
 				'attribute' => $attribute,
 				'value'     => $value,
-			)
+			),
+			$this->posted_repos()
 		);
 		if ( is_wp_error( $result ) ) {
 			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
